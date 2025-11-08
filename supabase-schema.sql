@@ -31,7 +31,20 @@ CREATE TABLE IF NOT EXISTS records (
   email TEXT NOT NULL,
   code TEXT NOT NULL,
   grades JSONB DEFAULT '{}'::jsonb,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Student email cache table (for Moodle email lookups)
+CREATE TABLE IF NOT EXISTS student_email_cache (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  student_number TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL,
+  fullname TEXT,
+  moodle_user_id INTEGER,
+  last_synced_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Create indexes for better query performance
@@ -43,6 +56,8 @@ CREATE INDEX IF NOT EXISTS idx_records_email ON records(email);
 CREATE INDEX IF NOT EXISTS idx_records_student_number ON records(student_number);
 CREATE INDEX IF NOT EXISTS idx_records_code ON records(code);
 CREATE INDEX IF NOT EXISTS idx_records_lookup ON records(email, student_number, code);
+CREATE INDEX IF NOT EXISTS idx_student_email_cache_student_number ON student_email_cache(student_number);
+CREATE INDEX IF NOT EXISTS idx_student_email_cache_email ON student_email_cache(email);
 
 -- Enable Row Level Security (RLS) - optional, adjust based on your security needs
 -- ALTER TABLE users ENABLE ROW LEVEL SECURITY;

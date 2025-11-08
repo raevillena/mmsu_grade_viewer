@@ -158,74 +158,86 @@ export async function validateToken(
       return { valid: false };
     }
 
-    const data = await response.json();
-    
-    // Backend returns { msg: "Session Valid." } on success
-    // But we don't get user info from this endpoint, so we'll get it from cookies/Supabase
-    if (data.msg && data.msg.includes("Session Valid")) {
-      // Try to get user info from cookies if not provided
-      let finalUserId = userId;
-      let finalUserRole = userRole;
-      
-      // Only try to use cookies() if we're in a Server Component/Route Handler context
-      // (not in Edge Runtime like proxy.ts)
-      if (!finalUserId || !finalUserRole) {
-        try {
-          const cookieStore = await cookies();
-          finalUserId = finalUserId || cookieStore.get(COOKIE_NAMES.USER_ID)?.value;
-          finalUserRole = finalUserRole || cookieStore.get(COOKIE_NAMES.USER_ROLE)?.value;
-        } catch (cookieError) {
-          // If cookies() fails (e.g., in Edge Runtime), use provided values
-          // This is expected in proxy.ts context
-        }
-      }
-
-      // If we have user info from cookies, get full details from Supabase
-      if (finalUserId && finalUserRole) {
-        try {
-          const { createServerSupabaseClient } = await import("./supabaseClient");
-          const supabase = createServerSupabaseClient();
-          const { data: user } = await supabase
-            .from("users")
-            .select("id, name, email, role")
-            .eq("external_id", finalUserId)
-            .single();
-          
-          if (user) {
-            return {
-              valid: true,
-              user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                role: user.role as "admin" | "teacher",
-              },
-            };
-          }
-        } catch (supabaseError) {
-          // If Supabase lookup fails, continue with cookie data
-          console.warn("Could not fetch user from Supabase:", supabaseError);
-        }
-      }
-
-      // If we have role from cookies but no Supabase user, return basic validation
-      if (finalUserRole) {
-        return {
-          valid: true,
-          user: {
-            id: finalUserId || "",
-            name: "",
-            email: "",
-            role: finalUserRole as "admin" | "teacher",
-          },
-        };
-      }
-
-      // Token is valid but no user info available
-      return { valid: true };
+    // Backend returns 200 status on success with { msg: "Session Valid." }
+    // Success is determined by status 200, not by the message content
+    // Try to parse JSON, but if it fails, we still trust the 200 status
+    let data: any = {};
+    try {
+      data = await response.json();
+    } catch (jsonError) {
+      // If JSON parsing fails but status is 200, still consider it valid
+      console.warn("Could not parse validation response JSON, but status is 200:", jsonError);
     }
     
-    return { valid: false };
+    // Verify the message matches expected format (safety check)
+    // But if status is 200, we trust it regardless of message content
+    const hasValidMessage = data.msg && data.msg.includes("Session Valid");
+    if (!hasValidMessage && data.msg) {
+      console.warn("Unexpected validation message:", data.msg, "but status is 200, treating as valid");
+    }
+    
+    // If we got here, response.ok is true (status 200), so token is valid
+    // Now get user info from cookies/Supabase
+    // Try to get user info from cookies if not provided
+    let finalUserId = userId;
+    let finalUserRole = userRole;
+    
+    // Only try to use cookies() if we're in a Server Component/Route Handler context
+    // (not in Edge Runtime like proxy.ts)
+    if (!finalUserId || !finalUserRole) {
+      try {
+        const cookieStore = await cookies();
+        finalUserId = finalUserId || cookieStore.get(COOKIE_NAMES.USER_ID)?.value;
+        finalUserRole = finalUserRole || cookieStore.get(COOKIE_NAMES.USER_ROLE)?.value;
+      } catch (cookieError) {
+        // If cookies() fails (e.g., in Edge Runtime), use provided values
+        // This is expected in proxy.ts context
+      }
+    }
+
+    // If we have user info from cookies, get full details from Supabase
+    if (finalUserId && finalUserRole) {
+      try {
+        const { createServerSupabaseClient } = await import("./supabaseClient");
+        const supabase = createServerSupabaseClient();
+        const { data: user } = await supabase
+          .from("users")
+          .select("id, name, email, role")
+          .eq("external_id", finalUserId)
+          .single();
+        
+        if (user) {
+          return {
+            valid: true,
+            user: {
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              role: user.role as "admin" | "teacher",
+            },
+          };
+        }
+      } catch (supabaseError) {
+        // If Supabase lookup fails, continue with cookie data
+        console.warn("Could not fetch user from Supabase:", supabaseError);
+      }
+    }
+
+    // If we have role from cookies but no Supabase user, return basic validation
+    if (finalUserRole) {
+      return {
+        valid: true,
+        user: {
+          id: finalUserId || "",
+          name: "",
+          email: "",
+          role: finalUserRole as "admin" | "teacher",
+        },
+      };
+    }
+
+    // Token is valid but no user info available
+    return { valid: true };
   } catch (error) {
     console.error("Token validation error:", error);
     return { valid: false };

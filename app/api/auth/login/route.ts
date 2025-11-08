@@ -47,8 +47,33 @@ export async function POST(request: NextRequest) {
 
     console.log("Login successful for:", authResponse.user.email);
 
-    // Extract data from the API response
-    const userRole = authResponse.user.role as "admin" | "teacher";
+    // Extract role from apps array - this is the app-specific role
+    // The user.role is the role within the umans app (not needed for this app)
+    let userRole: "admin" | "teacher" | "student" | null = null;
+    
+    if (authResponse.user.apps && authResponse.user.apps.length > 0) {
+      // Get the role from the first app's Roles.userType
+      // In the future, we might want to match by app name if there are multiple apps
+      const appRole = authResponse.user.apps[0]?.Roles?.userType;
+      if (appRole) {
+        // Validate and normalize the role
+        const normalizedRole = appRole.toLowerCase();
+        if (normalizedRole === "admin" || normalizedRole === "teacher" || normalizedRole === "student") {
+          userRole = normalizedRole as "admin" | "teacher" | "student";
+        } else {
+          console.warn(`Unexpected role from app: ${appRole}, defaulting to null`);
+        }
+      }
+    }
+
+    if (!userRole) {
+      console.error("No valid role found in apps array for user:", authResponse.user.email);
+      return NextResponse.json(
+        { error: "User does not have a valid role for this application" },
+        { status: 403 }
+      );
+    }
+
     const userName = `${authResponse.user.firstName} ${authResponse.user.lastName}`.trim();
     const externalUserId = String(authResponse.user.id);
     const accessToken = authResponse.token.accessToken;
@@ -71,13 +96,16 @@ export async function POST(request: NextRequest) {
         role: userRole,
       });
     } else {
-      // Update user if they exist but external_id is missing or name has changed
+      // Update user if they exist but external_id is missing, name has changed, or role has changed
       const updates: any = {};
       if (!existingUser.external_id) {
         updates.external_id = externalUserId;
       }
       if (existingUser.name !== userName) {
         updates.name = userName;
+      }
+      if (existingUser.role !== userRole) {
+        updates.role = userRole;
       }
       if (Object.keys(updates).length > 0) {
         await supabase

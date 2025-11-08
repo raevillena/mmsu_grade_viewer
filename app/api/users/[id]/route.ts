@@ -29,7 +29,11 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const validation = await validateToken(accessToken);
+    // Get refresh token and user info from cookies (required by validateToken)
+    const refreshToken = request.cookies.get("refresh_token")?.value;
+    const userId = request.cookies.get("user_id")?.value;
+    const userRole = request.cookies.get("user_role")?.value;
+    const validation = await validateToken(accessToken, refreshToken, userId, userRole);
 
     if (!validation.valid || !validation.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -81,7 +85,11 @@ export async function PUT(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const validation = await validateToken(accessToken);
+    // Get refresh token and user info from cookies (required by validateToken)
+    const refreshToken = request.cookies.get("refresh_token")?.value;
+    const userId = request.cookies.get("user_id")?.value;
+    const userRole = request.cookies.get("user_role")?.value;
+    const validation = await validateToken(accessToken, refreshToken, userId, userRole);
 
     if (!validation.valid || !validation.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -168,7 +176,11 @@ export async function DELETE(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const validation = await validateToken(accessToken);
+    // Get refresh token and user info from cookies (required by validateToken)
+    const refreshToken = request.cookies.get("refresh_token")?.value;
+    const userId = request.cookies.get("user_id")?.value;
+    const userRole = request.cookies.get("user_role")?.value;
+    const validation = await validateToken(accessToken, refreshToken, userId, userRole);
 
     if (!validation.valid || !validation.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

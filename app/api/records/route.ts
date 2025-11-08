@@ -12,7 +12,7 @@ const createRecordSchema = z.object({
   student_number: z.string().min(1, "Student number is required"),
   email: z.string().email("Invalid email address"),
   code: z.string().min(1, "Security code is required"),
-  grades: z.record(z.number(), z.number()),
+  grades: z.record(z.string(), z.number()),
 });
 
 /**
@@ -24,16 +24,14 @@ export async function GET(request: NextRequest) {
     const supabase = createServerSupabaseClient();
     const { searchParams } = new URL(request.url);
     const subjectId = searchParams.get("subject_id");
-    const email = searchParams.get("email");
     const studentNumber = searchParams.get("student_number");
     const code = searchParams.get("code");
 
-    // Public lookup (no auth required)
-    if (email && studentNumber && code) {
+    // Public lookup (no auth required) - only requires student_number and code
+    if (studentNumber && code) {
       const { data, error } = await supabase
         .from("records")
         .select("*, subjects(name)")
-        .eq("email", email)
         .eq("student_number", studentNumber)
         .eq("code", code);
 
@@ -57,7 +55,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const validation = await validateToken(accessToken);
+    // Get refresh token and user info from cookies (required by validateToken)
+    const refreshToken = request.cookies.get("refresh_token")?.value;
+    const userId = request.cookies.get("user_id")?.value;
+    const userRole = request.cookies.get("user_role")?.value;
+    const validation = await validateToken(accessToken, refreshToken, userId, userRole);
 
     if (!validation.valid || !validation.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -140,7 +142,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const validation = await validateToken(accessToken);
+    // Get refresh token and user info from cookies (required by validateToken)
+    const refreshToken = request.cookies.get("refresh_token")?.value;
+    const userId = request.cookies.get("user_id")?.value;
+    const userRole = request.cookies.get("user_role")?.value;
+    const validation = await validateToken(accessToken, refreshToken, userId, userRole);
 
     if (!validation.valid || !validation.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -152,7 +158,21 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const validatedData = createRecordSchema.parse(body);
+    console.log("POST /api/records: Received request body:", JSON.stringify(body, null, 2));
+    
+    let validatedData;
+    try {
+      validatedData = createRecordSchema.parse(body);
+      console.log("POST /api/records: Validation passed:", JSON.stringify(validatedData, null, 2));
+    } catch (validationError) {
+      if (validationError instanceof z.ZodError) {
+        console.error("POST /api/records: Validation failed:", {
+          errors: validationError.errors,
+          body: JSON.stringify(body, null, 2),
+        });
+      }
+      throw validationError;
+    }
 
     const supabase = createServerSupabaseClient();
 
@@ -180,6 +200,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    console.log("POST /api/records: Inserting into database:", JSON.stringify(validatedData, null, 2));
+    
     const { data, error } = await supabase
       .from("records")
       .insert(validatedData)
@@ -187,19 +209,37 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (error) {
+      console.error("POST /api/records: Database error:", {
+        error: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+        validatedData: JSON.stringify(validatedData, null, 2),
+      });
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    console.log("POST /api/records: Successfully created record:", JSON.stringify(data, null, 2));
     return NextResponse.json({ data }, { status: 201 });
   } catch (error) {
     if (error instanceof z.ZodError) {
+      console.error("POST /api/records: Zod validation error:", {
+        errors: error.errors,
+        errorCount: error.errors.length,
+        issues: error.issues,
+      });
       return NextResponse.json(
         { error: "Invalid request data", details: error.errors },
         { status: 400 }
       );
     }
 
-    console.error("Create record error:", error);
+    console.error("POST /api/records: Unexpected error:", {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      type: error?.constructor?.name,
+      fullError: error,
+    });
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,13 +43,21 @@ export default function LoginPage() {
         data = await response.json();
       } catch (parseError) {
         console.error("Failed to parse response:", parseError);
-        setError("Invalid response from server");
+        const errorMessage = "Invalid response from server";
+        setError(errorMessage);
+        toast.error("Server Error", {
+          description: errorMessage,
+        });
         setLoading(false);
         return;
       }
 
       if (!response.ok) {
-        setError(data.error || "Login failed");
+        const errorMessage = data.error || "Login failed";
+        setError(errorMessage);
+        toast.error("Login Failed", {
+          description: errorMessage,
+        });
         setLoading(false);
         return;
       }
@@ -65,23 +75,43 @@ export default function LoginPage() {
 
       if (targetPath) {
         console.log(`Redirecting to ${targetPath} for role: ${data.user?.role}`);
-        // Force immediate redirect
-        window.location.replace(targetPath);
+        toast.success("Login Successful", {
+          description: `Welcome! Redirecting to ${data.user?.role === "admin" ? "Admin" : "Teacher"} dashboard...`,
+          duration: 3000, // Show for 3 seconds
+        });
+        // Use router.push for client-side navigation to preserve toast state
+        // Small delay to ensure toast is visible before navigation
+        setTimeout(() => {
+          router.push(targetPath);
+        }, 100);
       } else {
-        console.error("Unknown role:", data.user?.role);
+        const role = data.user?.role || "undefined";
+        console.error("Unknown role:", role);
         console.error("Full data:", data);
-        setError(`Unauthorized role: ${data.user?.role || "undefined"}`);
+        const errorMessage = `Unauthorized role: ${role}. You don't have access to this application.`;
+        setError(errorMessage);
+        toast.error("Access Denied", {
+          description: `Your account has the role "${role}" which is not authorized for this application. Please contact an administrator.`,
+          duration: 5000,
+        });
         setLoading(false);
       }
     } catch (err) {
       console.error("Login error:", err);
-      setError(err instanceof Error ? err.message : "An error occurred. Please try again.");
+      const errorMessage = err instanceof Error ? err.message : "An error occurred. Please try again.";
+      setError(errorMessage);
+      toast.error("Login Error", {
+        description: errorMessage,
+      });
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 relative">
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle>Login</CardTitle>

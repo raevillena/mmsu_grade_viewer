@@ -37,6 +37,7 @@ export interface GradeRecord {
   code: string;
   grades: globalThis.Record<string, number>; // JSONB in database, typed as Record<string, number>
   created_at: string;
+  updated_at?: string;
 }
 
 // Keep Record as an alias for backward compatibility

@@ -2,15 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { type User, type UserRole } from "@/lib/types";
-import { Plus, Edit, Trash2, LogOut } from "lucide-react";
+import { Plus, Edit, Trash2, LogOut, Loader2, RefreshCw } from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 /**
  * Admin Dashboard - User Management
@@ -29,9 +32,28 @@ export default function AdminUsersPage() {
     role: "student" as UserRole,
     external_id: "",
   });
+  const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<{ id: string; name: string } | null>(null);
+  
+  // Moodle sync state
+  const [moodleSyncDialogOpen, setMoodleSyncDialogOpen] = useState(false);
+  const [moodleCourseId, setMoodleCourseId] = useState("");
+  const [moodleEnrolId, setMoodleEnrolId] = useState("");
+  const [syncingEmails, setSyncingEmails] = useState(false);
 
   useEffect(() => {
     fetchUsers();
+    // Load Moodle settings from localStorage
+    const savedCourseId = localStorage.getItem("moodleCourseId");
+    const savedEnrolId = localStorage.getItem("moodleEnrolId");
+    if (savedCourseId) {
+      setMoodleCourseId(savedCourseId);
+    }
+    if (savedEnrolId) {
+      setMoodleEnrolId(savedEnrolId);
+    }
   }, []);
 
   const fetchUsers = async () => {
@@ -93,6 +115,7 @@ export default function AdminUsersPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSubmitting(true);
 
     try {
       const url = editingUser ? `/api/users/${editingUser.id}` : "/api/users";
@@ -120,21 +143,104 @@ export default function AdminUsersPage() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to save user");
+        const errorMessage = data.error || "Failed to save user";
+        setError(errorMessage);
+        toast.error(editingUser ? "Update Failed" : "Create Failed", {
+          description: errorMessage,
+        });
+        return;
       }
 
       handleCloseDialog();
       fetchUsers();
+      toast.success(editingUser ? "User Updated" : "User Created", {
+        description: `"${formData.name}" has been ${editingUser ? "updated" : "created"} successfully.`,
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      const errorMessage = err instanceof Error ? err.message : "An error occurred";
+      setError(errorMessage);
+      toast.error(editingUser ? "Update Failed" : "Create Failed", {
+        description: errorMessage,
+      });
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const handleDelete = async (userId: string) => {
-    if (!confirm("Are you sure you want to delete this user?")) {
+  const handleDeleteClick = (userId: string) => {
+    const user = users.find((u) => u.id === userId);
+    if (user) {
+      setUserToDelete({ id: userId, name: user.name });
+      setDeleteDialogOpen(true);
+    }
+  };
+
+  // Handle bulk sync from Moodle (admin only - updates global cache)
+  const handleBulkSyncEmails = async () => {
+    if (!moodleCourseId || !moodleEnrolId) {
+      toast.error("Configuration required", {
+        description: "Please enter Moodle Course ID and Enrol ID",
+      });
       return;
     }
 
+    setSyncingEmails(true);
+    try {
+      const response = await fetch("/api/moodle/sync-emails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          courseid: moodleCourseId,
+          enrolid: moodleEnrolId,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to sync emails");
+      }
+
+      // Bulk sync is no longer supported
+      if (!data.success) {
+        throw new Error(data.error || "Bulk sync is not supported");
+      }
+
+      if (data.success) {
+        const { total, synced, created, updated, recordsUpdated, errors } = data.data;
+        
+        // Save Moodle settings to localStorage
+        if (moodleCourseId) {
+          localStorage.setItem("moodleCourseId", moodleCourseId);
+        }
+        if (moodleEnrolId) {
+          localStorage.setItem("moodleEnrolId", moodleEnrolId);
+        }
+        
+        const recordsText = recordsUpdated > 0 ? `, ${recordsUpdated} grade record(s) updated` : "";
+        toast.success("Sync completed", {
+          description: `Synced ${synced} students (${created} created, ${updated} updated)${recordsText}${errors > 0 ? `. ${errors} errors.` : ""}`,
+        });
+        
+        setMoodleSyncDialogOpen(false);
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to sync emails";
+      toast.error("Sync failed", {
+        description: errorMessage,
+      });
+    } finally {
+      setSyncingEmails(false);
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!userToDelete) return;
+
+    const userId = userToDelete.id;
+    const userName = userToDelete.name;
+
+    setDeletingId(userId);
     try {
       const response = await fetch(`/api/users/${userId}`, {
         method: "DELETE",
@@ -149,12 +255,27 @@ export default function AdminUsersPage() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to delete user");
+        const errorMessage = data.error || "Failed to delete user";
+        setError(errorMessage);
+        toast.error("Delete Failed", {
+          description: errorMessage,
+        });
+        return;
       }
 
       fetchUsers();
+      toast.success("User Deleted", {
+        description: `"${userName}" has been deleted successfully.`,
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      const errorMessage = err instanceof Error ? err.message : "An error occurred";
+      setError(errorMessage);
+      toast.error("Delete Failed", {
+        description: errorMessage,
+      });
+    } finally {
+      setDeletingId(null);
+      setUserToDelete(null);
     }
   };
 
@@ -172,17 +293,20 @@ export default function AdminUsersPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
+    <div className="min-h-screen bg-background p-8">
       <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-3xl font-bold">Admin Dashboard</h1>
             <p className="text-muted-foreground mt-1">Manage users</p>
           </div>
-          <Button variant="outline" onClick={handleLogout}>
-            <LogOut className="mr-2 h-4 w-4" />
-            Logout
-          </Button>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <Button variant="outline" onClick={handleLogout}>
+              <LogOut className="mr-2 h-4 w-4" />
+              Logout
+            </Button>
+          </div>
         </div>
 
         {error && (
@@ -190,6 +314,17 @@ export default function AdminUsersPage() {
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
+
+        <div className="flex gap-4 mb-6">
+          <Button 
+            variant="outline" 
+            onClick={() => setMoodleSyncDialogOpen(true)}
+            disabled={syncingEmails}
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Sync Emails from Moodle
+          </Button>
+        </div>
 
         <Card>
           <CardHeader>
@@ -200,7 +335,10 @@ export default function AdminUsersPage() {
                   Manage all users in the system
                 </CardDescription>
               </div>
-              <Button onClick={() => handleOpenDialog()}>
+              <Button 
+                onClick={() => handleOpenDialog()}
+                disabled={submitting || deletingId !== null}
+              >
                 <Plus className="mr-2 h-4 w-4" />
                 Add User
               </Button>
@@ -245,15 +383,21 @@ export default function AdminUsersPage() {
                             variant="ghost"
                             size="icon"
                             onClick={() => handleOpenDialog(user)}
+                            disabled={deletingId === user.id || submitting}
                           >
                             <Edit className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => handleDelete(user.id)}
+                            onClick={() => handleDeleteClick(user.id)}
+                            disabled={deletingId === user.id || submitting}
                           >
-                            <Trash2 className="h-4 w-4 text-destructive" />
+                            {deletingId === user.id ? (
+                              <Loader2 className="h-4 w-4 text-destructive animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            )}
                           </Button>
                         </div>
                       </TableCell>
@@ -287,6 +431,7 @@ export default function AdminUsersPage() {
                     setFormData({ ...formData, name: e.target.value })
                   }
                   required
+                  disabled={submitting}
                 />
               </div>
 
@@ -300,6 +445,7 @@ export default function AdminUsersPage() {
                     setFormData({ ...formData, email: e.target.value })
                   }
                   required
+                  disabled={submitting}
                 />
               </div>
 
@@ -307,7 +453,7 @@ export default function AdminUsersPage() {
                 <Label htmlFor="role">Role</Label>
                 <select
                   id="role"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   value={formData.role}
                   onChange={(e) =>
                     setFormData({
@@ -316,6 +462,7 @@ export default function AdminUsersPage() {
                     })
                   }
                   required
+                  disabled={submitting}
                 >
                   <option value="admin">Admin</option>
                   <option value="teacher">Teacher</option>
@@ -332,6 +479,7 @@ export default function AdminUsersPage() {
                     setFormData({ ...formData, external_id: e.target.value })
                   }
                   placeholder="External API user ID"
+                  disabled={submitting}
                 />
               </div>
 
@@ -342,12 +490,129 @@ export default function AdminUsersPage() {
               )}
 
               <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={handleCloseDialog}>
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  onClick={handleCloseDialog}
+                  disabled={submitting}
+                >
                   Cancel
                 </Button>
-                <Button type="submit">{editingUser ? "Update" : "Create"}</Button>
+                <Button type="submit" disabled={submitting}>
+                  {submitting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {editingUser ? "Updating..." : "Creating..."}
+                    </>
+                  ) : (
+                    editingUser ? "Update" : "Create"
+                  )}
+                </Button>
               </div>
             </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog
+          open={deleteDialogOpen}
+          onOpenChange={setDeleteDialogOpen}
+          onConfirm={handleDeleteConfirm}
+          title="Delete User"
+          description={
+            userToDelete
+              ? `Are you sure you want to delete "${userToDelete.name}"? This action cannot be undone.`
+              : ""
+          }
+          confirmText="Delete"
+          cancelText="Cancel"
+          variant="destructive"
+        />
+
+        {/* Moodle Sync Dialog */}
+        <Dialog open={moodleSyncDialogOpen} onOpenChange={setMoodleSyncDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Sync Emails from Moodle</DialogTitle>
+              <DialogDescription>
+                <div className="space-y-2">
+                  <p className="text-destructive font-medium">
+                    Bulk sync is not supported because Moodle API doesn't return student numbers (idnumber) when fetching all users.
+                  </p>
+                  <p>
+                    Please use the subject-specific sync feature in each subject's page instead. 
+                    That feature searches Moodle individually for each student number in the subject's records.
+                  </p>
+                </div>
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="moodle-course-id">Moodle Course ID</Label>
+                <Input
+                  id="moodle-course-id"
+                  type="text"
+                  placeholder="e.g., 15556"
+                  value={moodleCourseId}
+                  onChange={(e) => {
+                    setMoodleCourseId(e.target.value);
+                    if (e.target.value.trim()) {
+                      localStorage.setItem("moodleCourseId", e.target.value.trim());
+                    }
+                  }}
+                  disabled={syncingEmails}
+                />
+                <p className="text-sm text-muted-foreground">
+                  The course ID from Moodle (found in the course URL)
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="moodle-enrol-id">Moodle Enrol ID</Label>
+                <Input
+                  id="moodle-enrol-id"
+                  type="text"
+                  placeholder="e.g., 49444"
+                  value={moodleEnrolId}
+                  onChange={(e) => {
+                    setMoodleEnrolId(e.target.value);
+                    if (e.target.value.trim()) {
+                      localStorage.setItem("moodleEnrolId", e.target.value.trim());
+                    }
+                  }}
+                  disabled={syncingEmails}
+                />
+                <p className="text-sm text-muted-foreground">
+                  The enrollment ID from Moodle (found in enrollment settings)
+                </p>
+              </div>
+              {error && (
+                <Alert variant="destructive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setMoodleSyncDialogOpen(false)}
+                  disabled={syncingEmails}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleBulkSyncEmails}
+                  disabled={true}
+                  variant="outline"
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Not Available
+                </Button>
+                <p className="text-sm text-muted-foreground text-center">
+                  Use subject-specific sync in each subject page instead
+                </p>
+              </div>
+            </div>
           </DialogContent>
         </Dialog>
       </div>
