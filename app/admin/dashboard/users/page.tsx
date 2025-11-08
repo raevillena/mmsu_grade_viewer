@@ -12,8 +12,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { type User, type UserRole } from "@/lib/types";
-import { Plus, Edit, Trash2, LogOut, Loader2, RefreshCw } from "lucide-react";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { Plus, Edit, Trash2, Loader2, RefreshCw } from "lucide-react";
+import { AdminSidebar } from "@/components/admin-sidebar";
 
 /**
  * Admin Dashboard - User Management
@@ -37,23 +37,8 @@ export default function AdminUsersPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<{ id: string; name: string } | null>(null);
   
-  // Moodle sync state
-  const [moodleSyncDialogOpen, setMoodleSyncDialogOpen] = useState(false);
-  const [moodleCourseId, setMoodleCourseId] = useState("");
-  const [moodleEnrolId, setMoodleEnrolId] = useState("");
-  const [syncingEmails, setSyncingEmails] = useState(false);
-
   useEffect(() => {
     fetchUsers();
-    // Load Moodle settings from localStorage
-    const savedCourseId = localStorage.getItem("moodleCourseId");
-    const savedEnrolId = localStorage.getItem("moodleEnrolId");
-    if (savedCourseId) {
-      setMoodleCourseId(savedCourseId);
-    }
-    if (savedEnrolId) {
-      setMoodleEnrolId(savedEnrolId);
-    }
   }, []);
 
   const fetchUsers = async () => {
@@ -175,64 +160,6 @@ export default function AdminUsersPage() {
     }
   };
 
-  // Handle bulk sync from Moodle (admin only - updates global cache)
-  const handleBulkSyncEmails = async () => {
-    if (!moodleCourseId || !moodleEnrolId) {
-      toast.error("Configuration required", {
-        description: "Please enter Moodle Course ID and Enrol ID",
-      });
-      return;
-    }
-
-    setSyncingEmails(true);
-    try {
-      const response = await fetch("/api/moodle/sync-emails", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          courseid: moodleCourseId,
-          enrolid: moodleEnrolId,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to sync emails");
-      }
-
-      // Bulk sync is no longer supported
-      if (!data.success) {
-        throw new Error(data.error || "Bulk sync is not supported");
-      }
-
-      if (data.success) {
-        const { total, synced, created, updated, recordsUpdated, errors } = data.data;
-        
-        // Save Moodle settings to localStorage
-        if (moodleCourseId) {
-          localStorage.setItem("moodleCourseId", moodleCourseId);
-        }
-        if (moodleEnrolId) {
-          localStorage.setItem("moodleEnrolId", moodleEnrolId);
-        }
-        
-        const recordsText = recordsUpdated > 0 ? `, ${recordsUpdated} grade record(s) updated` : "";
-        toast.success("Sync completed", {
-          description: `Synced ${synced} students (${created} created, ${updated} updated)${recordsText}${errors > 0 ? `. ${errors} errors.` : ""}`,
-        });
-        
-        setMoodleSyncDialogOpen(false);
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to sync emails";
-      toast.error("Sync failed", {
-        description: errorMessage,
-      });
-    } finally {
-      setSyncingEmails(false);
-    }
-  };
 
   const handleDeleteConfirm = async () => {
     if (!userToDelete) return;
@@ -293,38 +220,20 @@ export default function AdminUsersPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background p-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-3xl font-bold">Admin Dashboard</h1>
-            <p className="text-muted-foreground mt-1">Manage users</p>
+    <div className="min-h-screen bg-background flex">
+      <AdminSidebar />
+      <div className="flex-1 p-8">
+        <div className="max-w-7xl mx-auto">
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold">Users</h1>
+            <p className="text-muted-foreground mt-1">Manage all users in the system</p>
           </div>
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
-            <Button variant="outline" onClick={handleLogout}>
-              <LogOut className="mr-2 h-4 w-4" />
-              Logout
-            </Button>
-          </div>
-        </div>
 
         {error && (
           <Alert variant="destructive" className="mb-6">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
-
-        <div className="flex gap-4 mb-6">
-          <Button 
-            variant="outline" 
-            onClick={() => setMoodleSyncDialogOpen(true)}
-            disabled={syncingEmails}
-          >
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Sync Emails from Moodle
-          </Button>
-        </div>
 
         <Card>
           <CardHeader>
@@ -528,93 +437,7 @@ export default function AdminUsersPage() {
           cancelText="Cancel"
           variant="destructive"
         />
-
-        {/* Moodle Sync Dialog */}
-        <Dialog open={moodleSyncDialogOpen} onOpenChange={setMoodleSyncDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Sync Emails from Moodle</DialogTitle>
-              <DialogDescription>
-                <div className="space-y-2">
-                  <p className="text-destructive font-medium">
-                    Bulk sync is not supported because Moodle API doesn't return student numbers (idnumber) when fetching all users.
-                  </p>
-                  <p>
-                    Please use the subject-specific sync feature in each subject's page instead. 
-                    That feature searches Moodle individually for each student number in the subject's records.
-                  </p>
-                </div>
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="moodle-course-id">Moodle Course ID</Label>
-                <Input
-                  id="moodle-course-id"
-                  type="text"
-                  placeholder="e.g., 15556"
-                  value={moodleCourseId}
-                  onChange={(e) => {
-                    setMoodleCourseId(e.target.value);
-                    if (e.target.value.trim()) {
-                      localStorage.setItem("moodleCourseId", e.target.value.trim());
-                    }
-                  }}
-                  disabled={syncingEmails}
-                />
-                <p className="text-sm text-muted-foreground">
-                  The course ID from Moodle (found in the course URL)
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="moodle-enrol-id">Moodle Enrol ID</Label>
-                <Input
-                  id="moodle-enrol-id"
-                  type="text"
-                  placeholder="e.g., 49444"
-                  value={moodleEnrolId}
-                  onChange={(e) => {
-                    setMoodleEnrolId(e.target.value);
-                    if (e.target.value.trim()) {
-                      localStorage.setItem("moodleEnrolId", e.target.value.trim());
-                    }
-                  }}
-                  disabled={syncingEmails}
-                />
-                <p className="text-sm text-muted-foreground">
-                  The enrollment ID from Moodle (found in enrollment settings)
-                </p>
-              </div>
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-              <div className="flex justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setMoodleSyncDialogOpen(false)}
-                  disabled={syncingEmails}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  onClick={handleBulkSyncEmails}
-                  disabled={true}
-                  variant="outline"
-                >
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Not Available
-                </Button>
-                <p className="text-sm text-muted-foreground text-center">
-                  Use subject-specific sync in each subject page instead
-                </p>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+        </div>
       </div>
     </div>
   );

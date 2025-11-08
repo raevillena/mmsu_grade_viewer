@@ -58,6 +58,7 @@ CREATE INDEX IF NOT EXISTS idx_records_code ON records(code);
 CREATE INDEX IF NOT EXISTS idx_records_lookup ON records(email, student_number, code);
 CREATE INDEX IF NOT EXISTS idx_student_email_cache_student_number ON student_email_cache(student_number);
 CREATE INDEX IF NOT EXISTS idx_student_email_cache_email ON student_email_cache(email);
+CREATE INDEX IF NOT EXISTS idx_student_email_cache_fullname ON student_email_cache(fullname);
 
 -- Enable Row Level Security (RLS) - optional, adjust based on your security needs
 -- ALTER TABLE users ENABLE ROW LEVEL SECURITY;
