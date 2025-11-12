@@ -1,6 +1,9 @@
 import { CookieJar } from "tough-cookie";
 import got, { Got } from "got";
 
+// Type assertion for got compatibility
+type ToughCookieJar = CookieJar;
+
 type MoodleCookies = Record<string, string>;
 
 interface MoodleClientOptions {
@@ -71,7 +74,7 @@ export class MoodleClient {
 
     this.http = got.extend({
       prefixUrl: this.options.baseUrl,
-      cookieJar: this.cookieJar,
+      cookieJar: this.cookieJar as any, // Type assertion for got compatibility
       headers: {
         "User-Agent": this.options.userAgent,
       },

@@ -4,5 +4,8 @@ declare module "tough-cookie" {
     setCookieSync(cookieOrString: string, url: string, options?: any): void;
     getCookieStringSync(url: string, options?: any): string;
   }
+  
+  // Alias for compatibility with got library
+  export class ToughCookieJar extends CookieJar {}
 }
 
