@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     let query = supabase
       .from("student_email_cache")
       .select("*", { count: "exact" })
-      .order("fullname", { ascending: true, nullsLast: true });
+      .order("fullname", { ascending: true, nullsFirst: false });
 
     // Apply search filter if provided
     if (search.trim()) {
