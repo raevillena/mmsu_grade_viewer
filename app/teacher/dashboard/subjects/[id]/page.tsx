@@ -40,6 +40,7 @@ export default function SubjectDetailPage() {
     email: "",
     code: "",
     grades: {} as Record<string, number>,
+    max_scores: {} as Record<string, number>,
   });
   const [gradeKeys, setGradeKeys] = useState<string[]>([]);
   const [googleSheetUrl, setGoogleSheetUrl] = useState("");
@@ -210,6 +211,7 @@ export default function SubjectDetailPage() {
         email: record.email,
         code: record.code,
         grades: record.grades || {},
+        max_scores: record.max_scores || {},
       });
       // Update grade keys if record has new keys
       const keys = Object.keys(record.grades || {});
@@ -225,6 +227,7 @@ export default function SubjectDetailPage() {
         email: "",
         code: "",
         grades: {},
+        max_scores: {},
       });
     }
     setDialogOpen(true);
@@ -465,6 +468,7 @@ export default function SubjectDetailPage() {
       email: "",
       code: "",
       grades: {},
+      max_scores: {},
     });
   };
 
@@ -490,9 +494,13 @@ export default function SubjectDetailPage() {
         : "/api/records";
       const method = editingRecord ? "PUT" : "POST";
 
+      // Build payload, excluding empty max_scores when updating (to preserve existing values)
+      const { max_scores, ...formDataWithoutMaxScores } = formData;
       const payload = {
-        ...formData,
+        ...formDataWithoutMaxScores,
         subject_id: subjectId,
+        // Only include max_scores if it has values (to avoid clearing existing max_scores on update)
+        ...(Object.keys(max_scores || {}).length > 0 ? { max_scores } : {}),
       };
 
       const response = await fetch(url, {
@@ -548,8 +556,8 @@ export default function SubjectDetailPage() {
   const handleEmailEditSave = async (recordId: string) => {
     const newEmail = editingEmailValue.trim();
     
-    // Validate email format
-    if (newEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+    // Validate email format (must be valid if provided, cannot be empty)
+    if (!newEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
       toast.error("Invalid email", {
         description: "Please enter a valid email address",
       });
@@ -585,16 +593,20 @@ export default function SubjectDetailPage() {
         return;
       }
 
-      const data = await response.json();
+      const responseText = await response.text();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseError) {
+        throw new Error("Invalid response from server");
+      }
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to update email");
       }
 
-      // Update local state
-      setRecords(records.map(r => 
-        r.id === recordId ? { ...r, email: newEmail } : r
-      ));
+      // Refresh records to ensure UI is in sync with database
+      await fetchRecords();
 
       setEditingEmailId(null);
       setEditingEmailValue("");
@@ -607,7 +619,6 @@ export default function SubjectDetailPage() {
       toast.error("Update failed", {
         description: errorMessage,
       });
-      // Keep editing mode open on error so user can retry
     } finally {
       setSavingEmailId(null);
     }
@@ -707,86 +718,155 @@ export default function SubjectDetailPage() {
       const workbook = XLSX.read(arrayBuffer, { type: "array" });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
-      const jsonData = XLSX.utils.sheet_to_json(worksheet);
+      // Parse with header row to get raw data for max scores
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
 
       // Process the data - expect columns: student_name, student_number, email, code, and grade columns
       const records: any[] = [];
 
-      for (const row of jsonData as any[]) {
-        const studentName = row["Student Name"] || row["student_name"] || row["Name"];
-        const studentNumber = row["Student Number"] || row["student_number"] || row["Student Number"];
-        const email = row["Email"] || row["email"];
-        const code = row["Code"] || row["code"] || row["Security Code"];
-
-        if (!studentName || !studentNumber || !email || !code) {
-          continue;
-        }
-
-        // Extract grades (all columns except the standard ones)
-        const grades: Record<string, number> = {};
-        Object.keys(row).forEach((key) => {
-          if (
-            !["Student Name", "student_name", "Name", "Student Number", "student_number", 
-              "Email", "email", "Code", "code", "Security Code"].includes(key)
-          ) {
-            const value = row[key];
-            // Skip empty values
-            if (value === null || value === undefined || value === "") {
-              return;
-            }
-            
-            // Convert to number more robustly - handle strings with whitespace
+      // Read second row (index 1) as max scores for each grade column
+      const maxScores: Record<string, number> = {};
+      if (jsonData.length > 1) {
+        const maxScoreRow = jsonData[1] as any[];
+        const headerRow = jsonData[0] as any[];
+        
+        // Find grade start column (typically after name, number, email, code columns)
+        const gradeStartColIndex = 4; // Default to column E (index 4)
+        
+        for (let colIndex = gradeStartColIndex; colIndex < maxScoreRow.length; colIndex++) {
+          const header = headerRow[colIndex] ? String(headerRow[colIndex]).trim() : `Column_${colIndex + 1}`;
+          const maxScoreValue = maxScoreRow[colIndex];
+          
+          // Try to parse as number
+          if (maxScoreValue !== null && maxScoreValue !== undefined && maxScoreValue !== "") {
             let numValue: number;
-            if (typeof value === "number") {
-              numValue = value;
+            if (typeof maxScoreValue === "number") {
+              numValue = maxScoreValue;
             } else {
-              const strValue = String(value).trim();
+              const strValue = String(maxScoreValue).trim();
               numValue = parseFloat(strValue);
             }
             
-            if (!isNaN(numValue) && isFinite(numValue)) {
-              grades[key] = numValue;
+            if (!isNaN(numValue) && isFinite(numValue) && numValue > 0) {
+              const gradeKey = header && header !== "" ? header : `Grade_${colIndex - gradeStartColIndex + 1}`;
+              maxScores[gradeKey] = numValue;
             }
           }
-        });
+        }
+        
+      }
 
-        records.push({
-          subject_id: subjectId,
-          student_name: studentName,
-          student_number: String(studentNumber),
-          email: String(email),
-          code: String(code),
-          grades,
+      // Process data rows (skip header row at index 0 and max score row at index 1)
+      // Start from row 2 (index 2)
+      for (let i = 2; i < jsonData.length; i++) {
+        const row = jsonData[i] as any[];
+        
+        // Skip empty rows
+        if (!row || row.length === 0 || row.every(cell => !cell || String(cell).trim() === "")) {
+          continue;
+        }
+
+        // Try to find columns by header names or use default positions
+        const headerRow = jsonData[0] as any[];
+        let nameColIndex = -1;
+        let numberColIndex = -1;
+        let emailColIndex = -1;
+        let codeColIndex = -1;
+        
+        headerRow.forEach((header, index) => {
+          const headerStr = String(header || "").toLowerCase().trim();
+          if (headerStr.includes("name") && !headerStr.includes("number") && nameColIndex === -1) {
+            nameColIndex = index;
+          } else if ((headerStr.includes("student") && headerStr.includes("number")) || headerStr === "id") {
+            if (numberColIndex === -1 && index < 10) {
+              numberColIndex = index;
+            }
+          } else if (headerStr.includes("email")) {
+            emailColIndex = index;
+          } else if (headerStr.includes("code") || headerStr.includes("security")) {
+            codeColIndex = index;
+          }
         });
+        
+        // Use defaults if not found
+        if (nameColIndex === -1) nameColIndex = 1;
+        if (numberColIndex === -1) numberColIndex = 2;
+        if (emailColIndex === -1) emailColIndex = 3;
+        if (codeColIndex === -1) codeColIndex = -1; // Optional
+        
+        const studentName = row[nameColIndex] ? String(row[nameColIndex]).trim() : "";
+        const studentNumber = row[numberColIndex] ? String(row[numberColIndex]).trim() : "";
+        const email = emailColIndex >= 0 && row[emailColIndex] 
+          ? String(row[emailColIndex]).trim() 
+          : `${studentNumber.replace(/[^a-zA-Z0-9]/g, "")}@mmsu.edu.ph`;
+        const code = codeColIndex >= 0 && row[codeColIndex]
+          ? String(row[codeColIndex]).trim()
+          : studentNumber.replace(/[^0-9]/g, "").slice(-6) || "000000";
+
+        if (!studentName || !studentNumber) {
+          continue;
+        }
+
+        // Extract grades from remaining columns (starting from index 4)
+        const grades: Record<string, number> = {};
+        const gradeStartColIndex = 4;
+        
+        for (let colIndex = gradeStartColIndex; colIndex < row.length; colIndex++) {
+          const header = headerRow[colIndex] ? String(headerRow[colIndex]).trim() : `Column_${colIndex + 1}`;
+          const value = row[colIndex];
+          
+          if (value === null || value === undefined || value === "") {
+            continue;
+          }
+          
+          let numValue: number;
+          if (typeof value === "number") {
+            numValue = value;
+          } else {
+            const strValue = String(value).trim();
+            numValue = parseFloat(strValue);
+          }
+          
+          if (!isNaN(numValue) && isFinite(numValue)) {
+            const gradeKey = header && header !== "" ? header : `Grade_${colIndex - gradeStartColIndex + 1}`;
+            grades[gradeKey] = numValue;
+          }
+        }
+
+        if (Object.keys(grades).length > 0) {
+          records.push({
+            subject_id: subjectId,
+            student_name: studentName,
+            student_number: String(studentNumber),
+            email: String(email),
+            code: String(code),
+            grades,
+            // Include max_scores if we found any (same for all records)
+            ...(Object.keys(maxScores).length > 0 ? { max_scores: maxScores } : {}),
+          });
+        }
       }
 
       if (records.length === 0) {
         throw new Error("No valid records found in the Excel file. Please check the file format.");
       }
 
-      console.log(`Excel Upload: Total records to upload: ${records.length}`);
-      console.log("Excel Upload: Sample record (first):", JSON.stringify(records[0], null, 2));
+      console.log(`Excel Upload: Parsed ${records.length} records`);
 
       // Clear all records if option is enabled
       if (clearAllBeforeImport) {
-        console.log("Excel Upload: Clearing all existing records...");
         try {
           const deleteResponse = await fetch(`/api/records?subject_id=${subjectId}`);
           if (deleteResponse.ok) {
             const deleteData = await deleteResponse.json();
             const existingRecords = deleteData.data || [];
-            let deletedCount = 0;
             for (const existingRecord of existingRecords) {
-              const deleteRecordResponse = await fetch(`/api/records/${existingRecord.id}`, {
+              await fetch(`/api/records/${existingRecord.id}`, {
                 method: "DELETE",
               });
-              if (deleteRecordResponse.ok) {
-                deletedCount++;
-              }
             }
-            console.log(`Excel Upload: Deleted ${deletedCount} existing records`);
             toast.info("Cleared Records", {
-              description: `Deleted ${deletedCount} existing record${deletedCount !== 1 ? "s" : ""}`,
+              description: `Deleted ${existingRecords.length} existing record${existingRecords.length !== 1 ? "s" : ""}`,
             });
           }
         } catch (deleteErr) {
@@ -808,9 +888,8 @@ export default function SubjectDetailPage() {
         existingRecordsMap.set(rec.student_number, rec.id);
       });
 
-      console.log(`Excel Upload: Found ${existingRecords.length} existing records to check against`);
 
-      // Upload/Update records
+      // Upload/Update records (emails will be synced after import using sync-subject-emails)
       let successCount = 0;
       let updateCount = 0;
       let createCount = 0;
@@ -823,9 +902,6 @@ export default function SubjectDetailPage() {
           const existingRecordId = existingRecordsMap.get(record.student_number);
           const isUpdate = !!existingRecordId;
           
-          console.log(`Excel Upload: ${isUpdate ? "Updating" : "Creating"} record ${i + 1}/${records.length} for ${record.student_name}...`);
-          console.log("Excel Upload: Record payload:", JSON.stringify(record, null, 2));
-          
           const url = existingRecordId ? `/api/records/${existingRecordId}` : "/api/records";
           const method = existingRecordId ? "PUT" : "POST";
           
@@ -835,17 +911,12 @@ export default function SubjectDetailPage() {
             body: JSON.stringify(record),
           });
 
-          console.log(`Excel Upload: Response status for ${record.student_name}:`, response.status);
-
           if (response.status === 401) {
-            // Unauthorized - redirect to login
-            console.error("Excel Upload: Unauthorized - redirecting to login");
             window.location.replace("/login");
             return;
           }
 
           const responseText = await response.text();
-          console.log(`Excel Upload: Response body for ${record.student_name}:`, responseText);
 
           if (!response.ok) {
             let errorData;
@@ -874,10 +945,8 @@ export default function SubjectDetailPage() {
           } else {
             if (isUpdate) {
               updateCount++;
-              console.log(`Excel Upload: Successfully updated record for ${record.student_name}`);
             } else {
               createCount++;
-              console.log(`Excel Upload: Successfully created record for ${record.student_name}`);
             }
             successCount++;
           }
@@ -894,6 +963,27 @@ export default function SubjectDetailPage() {
       }
       
       console.log(`Excel Upload: Upload complete. Success: ${successCount}, Errors: ${errorCount}`);
+
+      // Sync emails after import if Moodle config is available
+      if (successCount > 0 && moodleCourseId && moodleEnrolId) {
+        try {
+          const syncResponse = await fetch("/api/moodle/sync-subject-emails", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              subject_id: subjectId,
+              courseid: moodleCourseId,
+              enrolid: moodleEnrolId,
+            }),
+          });
+
+          if (!syncResponse.ok) {
+            console.warn("Email sync failed after import");
+          }
+        } catch (syncErr) {
+          console.warn("Error syncing emails:", syncErr);
+        }
+      }
 
       setUploadDialogOpen(false);
       fetchRecords();
@@ -966,26 +1056,18 @@ export default function SubjectDetailPage() {
       const gid = urlGidMatch ? urlGidMatch[1] : "0";
       const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
       
-      console.log("Google Sheets Import: Using sheet GID:", gid);
-      console.log("Google Sheets Import: CSV URL:", csvUrl);
-
       const response = await fetch(csvUrl);
       if (!response.ok) {
         throw new Error("Failed to fetch Google Sheet. Make sure the sheet is publicly accessible or shared with view permissions.");
       }
 
       const csvText = await response.text();
-      console.log("Google Sheets Import: CSV text length:", csvText.length);
-      console.log("Google Sheets Import: First 500 chars of CSV:", csvText.substring(0, 500));
-      
       const workbook = XLSX.read(csvText, { type: "string" });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       
       // Parse with header row, but also get raw data to handle positional columns
       const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
-      console.log("Google Sheets Import: Total rows parsed:", jsonData.length);
-      console.log("Google Sheets Import: First 3 rows:", JSON.stringify(jsonData.slice(0, 3), null, 2));
       
       // Process records - handle both header-based and positional column formats
       const records: any[] = [];
@@ -1001,7 +1083,6 @@ export default function SubjectDetailPage() {
       // Only check the first row (header row) for column names
       if (jsonData.length > 0) {
         const headerRow = jsonData[0] as any[];
-        console.log("Google Sheets Import: Header row:", JSON.stringify(headerRow, null, 2));
         headerRow.forEach((header, index) => {
           const headerStr = String(header || "").toLowerCase().trim();
           // Skip empty headers
@@ -1010,7 +1091,6 @@ export default function SubjectDetailPage() {
           // Look for name column - must contain "name" but not "number"
           if (headerStr.includes("name") && !headerStr.includes("number") && nameColIndex === -1) {
             nameColIndex = index;
-            console.log(`Google Sheets Import: Found name column at index ${index}: "${header}"`);
           } 
           // Look for student number column - must contain "student" and "number", or just "id" (but not as part of another word)
           else if (
@@ -1020,18 +1100,15 @@ export default function SubjectDetailPage() {
             // Only set if not already found and it's a reasonable position (not too far right, which would be a grade column)
             if (numberColIndex === -1 && index < 10) {
               numberColIndex = index;
-              console.log(`Google Sheets Import: Found number column at index ${index}: "${header}"`);
             }
           } 
           // Look for email column
           else if (headerStr.includes("email") || headerStr.includes("e-mail")) {
             emailColIndex = index;
-            console.log(`Google Sheets Import: Found email column at index ${index}: "${header}"`);
           } 
           // Look for code column
           else if (headerStr.includes("code") || headerStr.includes("security")) {
             codeColIndex = index;
-            console.log(`Google Sheets Import: Found code column at index ${index}: "${header}"`);
           }
         });
       }
@@ -1044,34 +1121,52 @@ export default function SubjectDetailPage() {
       // Column E (4)+: Grades
       if (nameColIndex === -1) {
         nameColIndex = 1; // Column B
-        console.log("Google Sheets Import: Using default name column index: 1 (Column B)");
       }
       if (numberColIndex === -1) {
         numberColIndex = 2; // Column C
-        console.log("Google Sheets Import: Using default number column index: 2 (Column C)");
       }
       if (gradeStartColIndex === -1) {
         gradeStartColIndex = 4; // Column E
-        console.log("Google Sheets Import: Using default grade start column index: 4 (Column E)");
       }
       
       // Validate that numberColIndex is reasonable (not a grade column)
       // Grade columns typically start at index 4+, so if numberColIndex is >= 4, it's probably wrong
       if (numberColIndex >= gradeStartColIndex) {
-        console.warn(`Google Sheets Import: Detected number column at index ${numberColIndex} seems incorrect (grade columns start at ${gradeStartColIndex}). Using default index 2.`);
         numberColIndex = 2;
       }
       
-      console.log("Google Sheets Import: Column mapping:", {
-        nameColIndex,
-        numberColIndex,
-        emailColIndex,
-        codeColIndex,
-        gradeStartColIndex,
-      });
+      // Read second row (index 1) as max scores for each grade column
+      const maxScores: Record<string, number> = {};
+      if (jsonData.length > 1) {
+        const maxScoreRow = jsonData[1] as any[];
+        const headerRow = jsonData[0] as any[];
+        
+        for (let colIndex = gradeStartColIndex; colIndex < maxScoreRow.length; colIndex++) {
+          const header = headerRow[colIndex] ? String(headerRow[colIndex]).trim() : `Column_${colIndex + 1}`;
+          const maxScoreValue = maxScoreRow[colIndex];
+          
+          // Try to parse as number
+          if (maxScoreValue !== null && maxScoreValue !== undefined && maxScoreValue !== "") {
+            let numValue: number;
+            if (typeof maxScoreValue === "number") {
+              numValue = maxScoreValue;
+            } else {
+              const strValue = String(maxScoreValue).trim();
+              numValue = parseFloat(strValue);
+            }
+            
+            if (!isNaN(numValue) && isFinite(numValue) && numValue > 0) {
+              const gradeKey = header && header !== "" ? header : `Grade_${colIndex - gradeStartColIndex + 1}`;
+              maxScores[gradeKey] = numValue;
+            }
+          }
+        }
+        
+      }
       
-      // Process data rows (skip header row and any empty rows)
-      for (let i = 1; i < jsonData.length; i++) {
+      // Process data rows (skip header row, max score row, and any empty rows)
+      // Start from row 2 (index 2) since row 0 is header and row 1 is max scores
+      for (let i = 2; i < jsonData.length; i++) {
         const row = jsonData[i] as any[];
         
         // Skip empty rows
@@ -1080,30 +1175,21 @@ export default function SubjectDetailPage() {
         }
         
         // Skip rows that look like header rows (all text, no numbers)
+        // Note: We already skip row 1 (max scores row) by starting loop at i=2
         const hasNumbers = row.some(cell => {
           const val = String(cell || "");
           return !isNaN(Number(val)) && val.trim() !== "";
         });
-        if (!hasNumbers && i === 1) {
-          continue; // Skip second row if it's a header row
+        if (!hasNumbers) {
+          continue; // Skip rows that look like header rows
         }
         
         const studentName = row[nameColIndex] ? String(row[nameColIndex]).trim() : "";
         const studentNumberRaw = row[numberColIndex];
         const studentNumber = studentNumberRaw ? String(studentNumberRaw).trim() : "";
         
-        // Debug logging for first few records
-        if (records.length < 3) {
-          console.log(`Google Sheets Import: Row ${i} - Raw row data:`, JSON.stringify(row, null, 2));
-          console.log(`Google Sheets Import: Row ${i} - nameColIndex: ${nameColIndex}, numberColIndex: ${numberColIndex}`);
-          console.log(`Google Sheets Import: Row ${i} - Extracted name: "${studentName}", number: "${studentNumber}" (raw: ${JSON.stringify(studentNumberRaw)})`);
-        }
-        
         // Skip if essential fields are missing
         if (!studentName || !studentNumber) {
-          if (records.length < 3) {
-            console.log(`Google Sheets Import: Row ${i} - Skipping due to missing name or number`);
-          }
           continue;
         }
         
@@ -1155,24 +1241,11 @@ export default function SubjectDetailPage() {
             email: email,
             code: code,
             grades,
+            // Include max_scores if we found any (same for all records)
+            ...(Object.keys(maxScores).length > 0 ? { max_scores: maxScores } : {}),
           };
           
-          console.log(`Google Sheets Import: Parsed record ${records.length + 1}:`, {
-            student_name: record.student_name,
-            student_number: record.student_number,
-            email: record.email,
-            code: record.code,
-            gradeCount: Object.keys(record.grades).length,
-            gradeKeys: Object.keys(record.grades).slice(0, 5), // First 5 grade keys
-          });
-          
           records.push(record);
-        } else {
-          console.log(`Google Sheets Import: Skipping row ${i + 1} - no grades found:`, {
-            studentName,
-            studentNumber,
-            rowLength: row.length,
-          });
         }
       }
 
@@ -1180,29 +1253,22 @@ export default function SubjectDetailPage() {
         throw new Error("No valid records found in the Google Sheet. Please check the sheet format.");
       }
 
-      console.log(`Google Sheets Import: Total records to upload: ${records.length}`);
-      console.log("Google Sheets Import: Sample record (first):", JSON.stringify(records[0], null, 2));
+      console.log(`Google Sheets Import: Parsed ${records.length} records`);
 
       // Clear all records if option is enabled
       if (clearAllBeforeImport) {
-        console.log("Google Sheets Import: Clearing all existing records...");
         try {
           const deleteResponse = await fetch(`/api/records?subject_id=${subjectId}`);
           if (deleteResponse.ok) {
             const deleteData = await deleteResponse.json();
             const existingRecords = deleteData.data || [];
-            let deletedCount = 0;
             for (const existingRecord of existingRecords) {
-              const deleteRecordResponse = await fetch(`/api/records/${existingRecord.id}`, {
+              await fetch(`/api/records/${existingRecord.id}`, {
                 method: "DELETE",
               });
-              if (deleteRecordResponse.ok) {
-                deletedCount++;
-              }
             }
-            console.log(`Google Sheets Import: Deleted ${deletedCount} existing records`);
             toast.info("Cleared Records", {
-              description: `Deleted ${deletedCount} existing record${deletedCount !== 1 ? "s" : ""}`,
+              description: `Deleted ${existingRecords.length} existing record${existingRecords.length !== 1 ? "s" : ""}`,
             });
           }
         } catch (deleteErr) {
@@ -1224,9 +1290,8 @@ export default function SubjectDetailPage() {
         existingRecordsMap.set(rec.student_number, rec.id);
       });
 
-      console.log(`Google Sheets Import: Found ${existingRecords.length} existing records to check against`);
 
-      // Upload/Update records
+      // Upload/Update records (emails will be synced after import using sync-subject-emails)
       let successCount = 0;
       let updateCount = 0;
       let createCount = 0;
@@ -1239,9 +1304,6 @@ export default function SubjectDetailPage() {
           const existingRecordId = existingRecordsMap.get(record.student_number);
           const isUpdate = !!existingRecordId;
           
-          console.log(`Google Sheets Import: ${isUpdate ? "Updating" : "Creating"} record ${i + 1}/${records.length} for ${record.student_name}...`);
-          console.log("Google Sheets Import: Record payload:", JSON.stringify(record, null, 2));
-          
           const url = existingRecordId ? `/api/records/${existingRecordId}` : "/api/records";
           const method = existingRecordId ? "PUT" : "POST";
           
@@ -1251,18 +1313,12 @@ export default function SubjectDetailPage() {
             body: JSON.stringify(record),
           });
 
-          console.log(`Google Sheets Import: Response status for ${record.student_name}:`, response.status);
-          console.log(`Google Sheets Import: Response headers:`, Object.fromEntries(response.headers.entries()));
-
           if (response.status === 401) {
-            // Unauthorized - redirect to login
-            console.error("Google Sheets Import: Unauthorized - redirecting to login");
             window.location.replace("/login");
             return;
           }
 
           const responseText = await response.text();
-          console.log(`Google Sheets Import: Response body for ${record.student_name}:`, responseText);
 
           if (!response.ok) {
             let errorData;
@@ -1291,10 +1347,8 @@ export default function SubjectDetailPage() {
           } else {
             if (isUpdate) {
               updateCount++;
-              console.log(`Google Sheets Import: Successfully updated record for ${record.student_name}`);
             } else {
               createCount++;
-              console.log(`Google Sheets Import: Successfully created record for ${record.student_name}`);
             }
             successCount++;
           }
@@ -1311,6 +1365,27 @@ export default function SubjectDetailPage() {
       }
       
       console.log(`Google Sheets Import: Upload complete. Success: ${successCount}, Errors: ${errorCount}`);
+
+      // Sync emails after import if Moodle config is available
+      if (successCount > 0 && moodleCourseId && moodleEnrolId) {
+        try {
+          const syncResponse = await fetch("/api/moodle/sync-subject-emails", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              subject_id: subjectId,
+              courseid: moodleCourseId,
+              enrolid: moodleEnrolId,
+            }),
+          });
+
+          if (!syncResponse.ok) {
+            console.warn("Email sync failed after import");
+          }
+        } catch (syncErr) {
+          console.warn("Error syncing emails:", syncErr);
+        }
+      }
 
       setUploadDialogOpen(false);
       setGoogleSheetUrl("");
@@ -1860,7 +1935,7 @@ export default function SubjectDetailPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-12">
+                    <TableHead className="w-12" rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
                       <div className="flex items-center">
                         <Checkbox
                           checked={isAllSelected}
@@ -1870,7 +1945,7 @@ export default function SubjectDetailPage() {
                         />
                       </div>
                     </TableHead>
-                    <TableHead>
+                    <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -1881,7 +1956,7 @@ export default function SubjectDetailPage() {
                         {getSortIcon("student_name")}
                       </Button>
                     </TableHead>
-                    <TableHead>
+                    <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -1892,7 +1967,7 @@ export default function SubjectDetailPage() {
                         {getSortIcon("student_number")}
                       </Button>
                     </TableHead>
-                    <TableHead>
+                    <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -1903,7 +1978,7 @@ export default function SubjectDetailPage() {
                         {getSortIcon("email")}
                       </Button>
                     </TableHead>
-                    <TableHead>
+                    <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -1927,7 +2002,7 @@ export default function SubjectDetailPage() {
                         </Button>
                       </TableHead>
                     ))}
-                    <TableHead className="text-right sticky right-0 z-30 bg-background/95 backdrop-blur-sm min-w-[120px] border-l-2 border-border/50 shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.1),_-2px_0_8px_-2px_rgba(0,0,0,0.05)] dark:shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.3),_-2px_0_8px_-2px_rgba(0,0,0,0.2)]">
+                    <TableHead className="text-right sticky right-0 z-30 bg-background/95 backdrop-blur-sm min-w-[120px] border-l-2 border-border/50 shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.1),_-2px_0_8px_-2px_rgba(0,0,0,0.05)] dark:shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.3),_-2px_0_8px_-2px_rgba(0,0,0,0.2)]" rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
                       <div className="flex items-center justify-end gap-1">
                         <span>Actions</span>
                         <div className="h-4 w-4 rounded-full bg-primary/10 flex items-center justify-center">
@@ -1936,6 +2011,19 @@ export default function SubjectDetailPage() {
                       </div>
                     </TableHead>
                   </TableRow>
+                  {records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 && (
+                    <TableRow>
+                      {/* Empty cells for columns that span 2 rows (Checkbox, Name, Number, Email, Code) */}
+                      {/* These are automatically skipped due to rowSpan, but we need to account for them */}
+                      {/* Then add max score cells for grade columns */}
+                      {gradeKeys.map((key) => (
+                        <TableHead key={key} className="text-center text-xs text-muted-foreground font-normal">
+                          / {records[0].max_scores![key] ?? "-"}
+                        </TableHead>
+                      ))}
+                      {/* Note: Actions column is handled by rowSpan, so no cell needed here */}
+                    </TableRow>
+                  )}
                 </TableHeader>
                 <TableBody>
                   {filteredAndSortedRecords.length === 0 ? (

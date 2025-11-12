@@ -13,6 +13,7 @@ const createRecordSchema = z.object({
   email: z.string().email("Invalid email address"),
   code: z.string().min(1, "Security code is required"),
   grades: z.record(z.string(), z.number()),
+  max_scores: z.record(z.string(), z.number()).optional(), // Max scores per grade key (from second row of sheets)
 });
 
 /**
@@ -200,11 +201,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    console.log("POST /api/records: Inserting into database:", JSON.stringify(validatedData, null, 2));
+    // Use the provided data directly (email should be fetched from Moodle in frontend if needed)
+    const recordData = validatedData;
+
+    console.log("POST /api/records: Inserting into database:", JSON.stringify(recordData, null, 2));
     
     const { data, error } = await supabase
       .from("records")
-      .insert(validatedData)
+      .insert(recordData)
       .select()
       .single();
 

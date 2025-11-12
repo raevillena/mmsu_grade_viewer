@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS records (
   email TEXT NOT NULL,
   code TEXT NOT NULL,
   grades JSONB DEFAULT '{}'::jsonb,
+  max_scores JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

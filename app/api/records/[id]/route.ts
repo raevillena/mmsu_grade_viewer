@@ -9,9 +9,10 @@ import { z } from "zod";
 const updateRecordSchema = z.object({
   student_name: z.string().min(1, "Student name is required").optional(),
   student_number: z.string().min(1, "Student number is required").optional(),
-  email: z.string().email("Invalid email address").optional(),
+  email: z.string().email("Invalid email address").optional(), // Allow valid email (empty strings will be filtered out)
   code: z.string().min(1, "Security code is required").optional(),
   grades: z.record(z.string(), z.number()).optional(),
+  max_scores: z.record(z.string(), z.number()).optional(), // Max scores per grade key (from second row of sheets)
 });
 
 /**
@@ -146,10 +147,17 @@ export async function PUT(
     }
 
     // Add updated_at timestamp when updating
-    const updateData = {
+    // Use the provided data directly (email should be fetched from Moodle in frontend if needed)
+    // Filter out empty email strings (database requires NOT NULL)
+    const updateData: any = {
       ...validatedData,
       updated_at: new Date().toISOString(),
     };
+    
+    // Remove email from update if it's an empty string (database requires NOT NULL)
+    if (updateData.email === "") {
+      delete updateData.email;
+    }
 
     const { data, error } = await supabase
       .from("records")
@@ -159,6 +167,7 @@ export async function PUT(
       .single();
 
     if (error) {
+      console.error(`[Update Record] Database error:`, error);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 

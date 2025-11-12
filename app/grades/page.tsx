@@ -122,6 +122,9 @@ function GradesPageContent() {
   };
 
   const gradeKeys = getAllGradeKeys(records);
+  
+  // Get max scores from first record (should be same for all records in a subject)
+  const maxScores = records.length > 0 && records[0].max_scores ? records[0].max_scores : {};
 
   return (
     <div className="min-h-screen bg-background py-12 px-4 relative">
@@ -144,7 +147,7 @@ function GradesPageContent() {
                   <Input
                     id="studentNumber"
                     type="text"
-                    placeholder="25-050072"
+                    placeholder="12-005577"
                     value={studentNumber}
                     onChange={(e) => setStudentNumber(e.target.value)}
                     required
@@ -157,7 +160,7 @@ function GradesPageContent() {
                   <Input
                     id="code"
                     type="text"
-                    placeholder="050072"
+                    placeholder="100001"
                     value={code}
                     onChange={(e) => setCode(e.target.value)}
                     required
@@ -209,15 +212,24 @@ function GradesPageContent() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Subject</TableHead>
-                      <TableHead>Student Name</TableHead>
-                      <TableHead>Student Number</TableHead>
+                      <TableHead rowSpan={Object.keys(maxScores).length > 0 ? 2 : 1}>Subject</TableHead>
+                      <TableHead rowSpan={Object.keys(maxScores).length > 0 ? 2 : 1}>Student Name</TableHead>
+                      <TableHead rowSpan={Object.keys(maxScores).length > 0 ? 2 : 1}>Student Number</TableHead>
                       {gradeKeys.map((key) => (
                         <TableHead key={key} className="text-center">
                           {key}
                         </TableHead>
                       ))}
                     </TableRow>
+                    {Object.keys(maxScores).length > 0 && (
+                      <TableRow>
+                        {gradeKeys.map((key) => (
+                          <TableHead key={key} className="text-center text-xs text-muted-foreground font-normal">
+                            / {maxScores[key] ?? "-"}
+                          </TableHead>
+                        ))}
+                      </TableRow>
+                    )}
                   </TableHeader>
                   <TableBody>
                     {records.map((record) => (

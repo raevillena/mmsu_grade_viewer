@@ -36,6 +36,7 @@ export interface GradeRecord {
   email: string;
   code: string;
   grades: globalThis.Record<string, number>; // JSONB in database, typed as Record<string, number>
+  max_scores?: globalThis.Record<string, number>; // JSONB in database, max score per grade key (from second row of sheets)
   created_at: string;
   updated_at?: string;
 }

@@ -18,13 +18,10 @@ type PotentialUsersResponse = PotentialUser[];
  * Fetch a single student's email from Moodle by student number
  */
 export async function POST(request: NextRequest) {
-  console.log("[Moodle Fetch Email] Starting email fetch...");
-
   try {
     const accessToken = request.cookies.get("access_token")?.value;
 
     if (!accessToken) {
-      console.error("[Moodle Fetch Email] No access token found");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -34,62 +31,76 @@ export async function POST(request: NextRequest) {
     const validation = await validateToken(accessToken, refreshToken, userId, userRole);
 
     if (!validation.valid || !validation.user) {
-      console.error("[Moodle Fetch Email] Token validation failed");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     // Only teachers and admins can fetch emails
     if (validation.user.role !== "teacher" && validation.user.role !== "admin") {
-      console.error("[Moodle Fetch Email] Forbidden: User role is", validation.user.role);
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const body = await request.json();
-    const { student_number, courseid, enrolid } = body;
+    const { student_number, student_name, courseid, enrolid } = body;
 
-    console.log("[Moodle Fetch Email] Request parameters:", {
-      student_number,
-      courseid,
-      enrolid,
-    });
-
-    if (!student_number) {
-      console.error("[Moodle Fetch Email] Missing student_number");
+    if (!student_number && !student_name) {
       return NextResponse.json(
-        { error: "student_number is required" },
+        { error: "student_number or student_name is required" },
         { status: 400 }
       );
     }
 
     if (!courseid || !enrolid) {
-      console.error("[Moodle Fetch Email] Missing courseid or enrolid");
       return NextResponse.json(
         { error: "courseid and enrolid are required" },
         { status: 400 }
       );
     }
 
-    // First, check cache
-    console.log(`[Moodle Fetch Email] Checking cache for student_number: ${student_number}`);
     const supabase = createServerSupabaseClient();
-    const { data: cached, error: cacheError } = await supabase
-      .from("student_email_cache")
-      .select("*")
-      .eq("student_number", student_number)
-      .single();
+    let cached: any = null;
 
-    if (cacheError && cacheError.code !== "PGRST116") {
-      console.error("[Moodle Fetch Email] Cache lookup error:", cacheError);
+    // First, try to find by student_number if provided
+    if (student_number) {
+      const { data, error } = await supabase
+        .from("student_email_cache")
+        .select("*")
+        .eq("student_number", student_number)
+        .single();
+
+      cached = data;
+      if (error && error.code !== "PGRST116") {
+        console.error("[Moodle Fetch Email] Cache lookup error:", error);
+      }
+    }
+
+    // If not found by student_number, try searching by name using LIKE
+    if (!cached && student_name) {
+      const { data: nameMatches, error: nameError } = await supabase
+        .from("student_email_cache")
+        .select("*")
+        .ilike("fullname", `%${student_name}%`);
+
+      if (nameError) {
+        console.error("[Moodle Fetch Email] Cache lookup error by name:", nameError);
+      } else if (nameMatches && nameMatches.length > 0) {
+        if (nameMatches.length === 1) {
+          cached = nameMatches[0];
+          // If we have student_number but it doesn't match, use Moodle to get exact match
+          if (student_number && cached.student_number !== student_number) {
+            cached = null; // Force Moodle lookup
+          }
+        } else {
+          cached = null; // Force Moodle lookup to get exact match
+        }
+      }
     }
 
     // If found in cache and synced recently (within 24 hours), return it
     if (cached && cached.last_synced_at) {
       const lastSynced = new Date(cached.last_synced_at);
       const hoursSinceSync = (Date.now() - lastSynced.getTime()) / (1000 * 60 * 60);
-      console.log(`[Moodle Fetch Email] Found in cache. Hours since sync: ${hoursSinceSync.toFixed(2)}`);
       
       if (hoursSinceSync < 24) {
-        console.log("[Moodle Fetch Email] Returning cached email (fresh)");
         return NextResponse.json({
           success: true,
           data: {
@@ -98,34 +109,25 @@ export async function POST(request: NextRequest) {
             from_cache: true,
           },
         });
-      } else {
-        console.log("[Moodle Fetch Email] Cache entry is stale (>24 hours), fetching from Moodle");
       }
-    } else {
-      console.log("[Moodle Fetch Email] Not found in cache, fetching from Moodle");
     }
 
     // Fetch from Moodle
-    console.log("[Moodle Fetch Email] Initializing Moodle client...");
     const client = MoodleClient.fromEnv();
 
     if (process.env.MOODLE_LOGIN_USERNAME && process.env.MOODLE_LOGIN_PASSWORD) {
-      console.log("[Moodle Fetch Email] Logging in to Moodle...");
       await client.login();
-      console.log("[Moodle Fetch Email] Login successful");
     }
 
-    console.log("[Moodle Fetch Email] Fetching sesskey...");
     const sesskey = await client.fetchSesskey();
-    console.log("[Moodle Fetch Email] Sesskey retrieved");
-
-    console.log("[Moodle Fetch Email] Calling Moodle API...");
+    // Use student_number for search if available, otherwise use student_name
+    const searchTerm = student_number || student_name || "";
     const payload = await client.callService<PotentialUsersResponse>(
       "core_enrol_get_potential_users",
       {
         courseid: String(courseid),
         enrolid: String(enrolid),
-        search: student_number,
+        search: searchTerm,
         searchanywhere: true,
         page: 0,
         perpage: 10,
@@ -133,10 +135,28 @@ export async function POST(request: NextRequest) {
       { sesskey }
     );
 
-    console.log(`[Moodle Fetch Email] Received ${payload.length} results from Moodle`);
 
-    // Find matching student by student number
-    const student = payload.find((user) => user.idnumber === student_number);
+    // Find matching student - prefer student_number match, then name match
+    let student = null;
+    if (student_number) {
+      // First try to match by student number (most accurate)
+      student = payload.find((user) => user.idnumber === student_number);
+    }
+    
+    // If not found by student_number, try to match by name
+    if (!student && student_name) {
+      // Try exact name match first
+      student = payload.find((user) => 
+        user.fullname?.toLowerCase().trim() === student_name.toLowerCase().trim()
+      );
+      
+      // If still not found, try partial match
+      if (!student) {
+        student = payload.find((user) => 
+          user.fullname?.toLowerCase().includes(student_name.toLowerCase().trim())
+        );
+      }
+    }
 
     if (!student || !student.email) {
       console.error("[Moodle Fetch Email] Student not found or missing email:", {
@@ -169,7 +189,6 @@ export async function POST(request: NextRequest) {
     };
 
     if (cached) {
-      console.log("[Moodle Fetch Email] Updating existing cache entry");
       const { error: updateError } = await supabase
         .from("student_email_cache")
         .update(cacheEntry)
@@ -236,7 +255,6 @@ export async function POST(request: NextRequest) {
       console.error("[Moodle Fetch Email] Exception updating records:", recordErr);
     }
 
-    console.log("[Moodle Fetch Email] Returning email from Moodle");
     return NextResponse.json({
       success: true,
       data: {
