@@ -9,6 +9,7 @@ import { z } from "zod";
 const updateSubjectSchema = z.object({
   name: z.string().min(1, "Subject name is required").optional(),
   teacher_id: z.string().uuid("Invalid teacher ID").optional(),
+  grading_system: z.any().optional(), // JSONB field - accept any valid JSON structure
 });
 
 /**

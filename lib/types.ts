@@ -16,12 +16,42 @@ export interface User {
 }
 
 /**
+ * Grading system component configuration
+ * Maps grade keys (like "quiz1", "LE1") to grading components
+ */
+export interface GradingComponent {
+  id: string; // Unique identifier for this component (e.g., "midterm", "final", "long_exam")
+  name: string; // Display name (e.g., "Midterm Exam", "Long Exam")
+  weight: number; // Weight percentage (e.g., 15 for 15%)
+  gradeKeys: string[]; // Array of grade keys that belong to this component (e.g., ["quiz1", "quiz2"])
+}
+
+/**
+ * Grading system category (e.g., "Major Exams", "Major Outputs")
+ */
+export interface GradingCategory {
+  id: string; // Unique identifier (e.g., "major_exams", "major_outputs")
+  name: string; // Display name (e.g., "Major Exams")
+  weight: number; // Total weight for this category (e.g., 30 for 30%)
+  components: GradingComponent[]; // Components within this category
+}
+
+/**
+ * Complete grading system configuration
+ */
+export interface GradingSystem {
+  categories: GradingCategory[]; // Array of categories
+  version?: string; // Optional version identifier
+}
+
+/**
  * Subject model matching the Supabase schema
  */
 export interface Subject {
   id: string;
   name: string;
   teacher_id: string;
+  grading_system?: GradingSystem; // Optional grading system configuration
   created_at: string;
 }
 

@@ -10,19 +10,32 @@ interface DialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
+  size?: "sm" | "md" | "lg" | "xl" | "2xl" | "full";
 }
 
-const Dialog: React.FC<DialogProps> = ({ open, onOpenChange, children }) => {
+const Dialog: React.FC<DialogProps> = ({ open, onOpenChange, children, size = "md" }) => {
   if (!open) return null;
+
+  const sizeClasses = {
+    sm: "max-w-sm",
+    md: "max-w-lg",
+    lg: "max-w-2xl",
+    xl: "max-w-4xl",
+    "2xl": "max-w-6xl",
+    full: "max-w-[95vw] w-[95vw]",
+  };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
       onClick={() => onOpenChange(false)}
     >
       <div className="fixed inset-0 bg-black/50" />
       <div
-        className="relative z-50 bg-background rounded-lg shadow-lg max-w-lg w-full mx-4"
+        className={cn(
+          "relative z-50 bg-background rounded-lg shadow-lg w-full mx-auto",
+          sizeClasses[size]
+        )}
         onClick={(e) => e.stopPropagation()}
       >
         {children}
@@ -37,11 +50,11 @@ const DialogContent: React.FC<{
   className?: string;
 }> = ({ children, onClose, className }) => {
   return (
-    <div className={cn("p-6", className)}>
+    <div className={cn("p-6 relative", className)}>
       {onClose && (
         <button
           onClick={onClose}
-          className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+          className="absolute right-4 top-4 z-10 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
         >
           <X className="h-4 w-4" />
           <span className="sr-only">Close</span>

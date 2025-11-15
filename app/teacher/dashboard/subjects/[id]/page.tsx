@@ -12,8 +12,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
-import { type Record as GradeRecord, type Subject } from "@/lib/types";
-import { ArrowLeft, Plus, Edit, Trash2, Upload, FileSpreadsheet, Loader2, ArrowUpDown, ArrowUp, ArrowDown, Search, X, Copy, Check, RefreshCw, Mail } from "lucide-react";
+import { type Record as GradeRecord, type Subject, type GradingSystem, type GradingCategory, type GradingComponent } from "@/lib/types";
+import { ArrowLeft, Plus, Edit, Trash2, Upload, FileSpreadsheet, Loader2, ArrowUpDown, ArrowUp, ArrowDown, Search, X, Copy, Check, RefreshCw, Mail, Calculator, Settings, BookOpen, FileText, ChevronDown, ChevronUp, Minus } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ThemeToggle } from "@/components/theme-toggle";
 import * as XLSX from "xlsx";
 
@@ -79,6 +80,23 @@ export default function SubjectDetailPage() {
   const [regeneratingCodeId, setRegeneratingCodeId] = useState<string | null>(null);
   const [showScrollHint, setShowScrollHint] = useState(false);
   const tableScrollRef = useRef<HTMLDivElement>(null);
+  
+  // Grading system state
+  const [gradingSystemDialogOpen, setGradingSystemDialogOpen] = useState(false);
+  const [gradingSystem, setGradingSystem] = useState<GradingSystem | null>(null);
+  const [savingGradingSystem, setSavingGradingSystem] = useState(false);
+  
+  // Computed grades state
+  const [computedGrades, setComputedGrades] = useState<any[] | null>(null);
+  const [computingGrades, setComputingGrades] = useState(false);
+  const [computedGradesDialogOpen, setComputedGradesDialogOpen] = useState(false);
+  
+  // Tab state
+  const [activeTab, setActiveTab] = useState("records");
+  
+  // Collapsible sections state for grading system dialog
+  const [gradeMappingExpanded, setGradeMappingExpanded] = useState(true);
+  const [weightsExpanded, setWeightsExpanded] = useState(true);
 
   useEffect(() => {
     if (subjectId) {
@@ -162,7 +180,18 @@ export default function SubjectDetailPage() {
         throw new Error(data.error || "Failed to fetch subject");
       }
 
-      setSubject(data.data);
+      const subjectData = data.data;
+      setSubject(subjectData);
+      // Load grading system if it exists and is valid
+      if (subjectData.grading_system && 
+          subjectData.grading_system.categories && 
+          Array.isArray(subjectData.grading_system.categories) && 
+          subjectData.grading_system.categories.length > 0) {
+        setGradingSystem(subjectData.grading_system);
+      } else {
+        // Reset to null if invalid structure
+        setGradingSystem(null);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
     }
@@ -1668,6 +1697,292 @@ export default function SubjectDetailPage() {
     }
   };
 
+  // Initialize default grading system structure
+  const getDefaultGradingSystem = (): GradingSystem => {
+    return {
+      categories: [
+        {
+          id: "major_exams",
+          name: "Major Exams",
+          weight: 30,
+          components: [
+            {
+              id: "midterm",
+              name: "Midterm Exam",
+              weight: 15,
+              gradeKeys: [],
+            },
+            {
+              id: "final",
+              name: "Final Exam",
+              weight: 15,
+              gradeKeys: [],
+            },
+          ],
+        },
+        {
+          id: "major_outputs",
+          name: "Major Outputs",
+          weight: 70,
+          components: [
+            {
+              id: "long_exam",
+              name: "Long Exam",
+              weight: 50,
+              gradeKeys: [],
+            },
+            {
+              id: "problem_set",
+              name: "Problem Set",
+              weight: 10,
+              gradeKeys: [],
+            },
+            {
+              id: "assignments",
+              name: "Assignment/Seatwork/Quizzes",
+              weight: 5,
+              gradeKeys: [],
+            },
+            {
+              id: "attendance",
+              name: "Attendance",
+              weight: 5,
+              gradeKeys: [],
+            },
+          ],
+        },
+      ],
+    };
+  };
+
+  // Handle opening grading system configuration dialog
+  const handleOpenGradingSystemDialog = () => {
+    if (!gradingSystem || !gradingSystem.categories || !Array.isArray(gradingSystem.categories) || gradingSystem.categories.length === 0) {
+      // Initialize with default structure if not properly configured
+      setGradingSystem(getDefaultGradingSystem());
+    }
+    setGradingSystemDialogOpen(true);
+  };
+
+  // Handle saving grading system
+  const handleSaveGradingSystem = async () => {
+    if (!gradingSystem || !gradingSystem.categories || !Array.isArray(gradingSystem.categories) || gradingSystem.categories.length === 0) {
+      toast.error("Invalid grading system", {
+        description: "Grading system is not properly configured.",
+      });
+      return;
+    }
+
+    // Validate weights sum to 100
+    const totalCategoryWeight = gradingSystem.categories.reduce((sum, cat) => sum + (cat.weight || 0), 0);
+    if (totalCategoryWeight !== 100) {
+      toast.error("Invalid weights", {
+        description: `Category weights must sum to 100%. Current total: ${totalCategoryWeight}%`,
+      });
+      return;
+    }
+
+    // Validate component weights within each category
+    for (const category of gradingSystem.categories) {
+      if (!category.components || !Array.isArray(category.components)) continue;
+      const totalComponentWeight = category.components.reduce((sum, comp) => sum + (comp.weight || 0), 0);
+      if (totalComponentWeight !== category.weight) {
+        toast.error("Invalid component weights", {
+          description: `Components in "${category.name}" must sum to ${category.weight}%. Current total: ${totalComponentWeight}%`,
+        });
+        return;
+      }
+    }
+
+    setSavingGradingSystem(true);
+    try {
+      const response = await fetch(`/api/subjects/${subjectId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          grading_system: gradingSystem,
+        }),
+      });
+
+      if (response.status === 401) {
+        window.location.replace("/login");
+        return;
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to save grading system");
+      }
+
+      setGradingSystemDialogOpen(false);
+      fetchSubject(); // Refresh to get updated subject
+      toast.success("Grading system saved", {
+        description: "Grading system configuration has been saved successfully.",
+      });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to save grading system";
+      toast.error("Save failed", {
+        description: errorMessage,
+      });
+    } finally {
+      setSavingGradingSystem(false);
+    }
+  };
+
+  // Handle computing grades
+  const handleComputeGrades = async () => {
+    if (!gradingSystem || !gradingSystem.categories || !Array.isArray(gradingSystem.categories) || gradingSystem.categories.length === 0) {
+      toast.error("Grading system not configured", {
+        description: "Please configure the grading system first.",
+      });
+      setGradingSystemDialogOpen(true);
+      return;
+    }
+
+    setComputingGrades(true);
+    try {
+      const response = await fetch(`/api/subjects/${subjectId}/compute-grades`, {
+        method: "POST",
+      });
+
+      if (response.status === 401) {
+        window.location.replace("/login");
+        return;
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to compute grades");
+      }
+
+      if (data.success && data.data) {
+        setComputedGrades(data.data.computedGrades);
+        setComputedGradesDialogOpen(true);
+        toast.success("Grades computed", {
+          description: `Computed grades for ${data.data.computedGrades.length} student(s).`,
+        });
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to compute grades";
+      toast.error("Compute failed", {
+        description: errorMessage,
+      });
+    } finally {
+      setComputingGrades(false);
+    }
+  };
+
+  // Get which components a grade key belongs to
+  const getGradeKeyComponents = (gradeKey: string): string[] => {
+    if (!gradingSystem || !gradingSystem.categories || !Array.isArray(gradingSystem.categories)) return [];
+    const componentIds: string[] = [];
+    gradingSystem.categories.forEach((category) => {
+      if (category && category.components && Array.isArray(category.components)) {
+        category.components.forEach((component) => {
+          if (component && component.gradeKeys && Array.isArray(component.gradeKeys) && component.gradeKeys.includes(gradeKey)) {
+            componentIds.push(component.id);
+          }
+        });
+      }
+    });
+    return componentIds;
+  };
+
+  // Assign a grade key to a component (1:1 mapping - removes from all other components first)
+  const assignGradeKeyToComponent = (gradeKey: string, componentId: string) => {
+    if (!gradingSystem || !gradingSystem.categories || !Array.isArray(gradingSystem.categories)) return;
+
+    const updatedSystem: GradingSystem = {
+      ...gradingSystem,
+      categories: gradingSystem.categories.map((category) => ({
+        ...category,
+        components: (category.components || []).map((component) => {
+          if (component.id === componentId) {
+            // Add the grade key to this component
+            const gradeKeys = (component.gradeKeys || []).includes(gradeKey)
+              ? component.gradeKeys || [] // Already assigned, keep it
+              : [...(component.gradeKeys || []), gradeKey]; // Add it
+            return { ...component, gradeKeys };
+          } else {
+            // Remove the grade key from all other components (1:1 mapping)
+            const gradeKeys = (component.gradeKeys || []).filter((k) => k !== gradeKey);
+            return { ...component, gradeKeys };
+          }
+        }),
+      })),
+    };
+
+    setGradingSystem(updatedSystem);
+  };
+
+  // Add a new component to a category
+  const addComponentToCategory = (categoryId: string) => {
+    if (!gradingSystem || !gradingSystem.categories || !Array.isArray(gradingSystem.categories)) return;
+
+    const category = gradingSystem.categories.find((cat) => cat.id === categoryId);
+    if (!category) return;
+
+    const newComponent: GradingComponent = {
+      id: `component_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: "New Component",
+      weight: 0,
+      gradeKeys: [],
+    };
+
+    const updatedSystem: GradingSystem = {
+      ...gradingSystem,
+      categories: gradingSystem.categories.map((cat) =>
+        cat.id === categoryId
+          ? { ...cat, components: [...(cat.components || []), newComponent] }
+          : cat
+      ),
+    };
+
+    setGradingSystem(updatedSystem);
+  };
+
+  // Remove a component from a category
+  const removeComponentFromCategory = (categoryId: string, componentId: string) => {
+    if (!gradingSystem || !gradingSystem.categories || !Array.isArray(gradingSystem.categories)) return;
+
+    const updatedSystem: GradingSystem = {
+      ...gradingSystem,
+      categories: gradingSystem.categories.map((cat) =>
+        cat.id === categoryId
+          ? {
+              ...cat,
+              components: (cat.components || []).filter((comp) => comp.id !== componentId),
+            }
+          : cat
+      ),
+    };
+
+    setGradingSystem(updatedSystem);
+  };
+
+  // Update component name
+  const updateComponentName = (categoryId: string, componentId: string, newName: string) => {
+    if (!gradingSystem || !gradingSystem.categories || !Array.isArray(gradingSystem.categories)) return;
+
+    const updatedSystem: GradingSystem = {
+      ...gradingSystem,
+      categories: gradingSystem.categories.map((cat) =>
+        cat.id === categoryId
+          ? {
+              ...cat,
+              components: (cat.components || []).map((comp) =>
+                comp.id === componentId ? { ...comp, name: newName } : comp
+              ),
+            }
+          : cat
+      ),
+    };
+
+    setGradingSystem(updatedSystem);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -1699,462 +2014,562 @@ export default function SubjectDetailPage() {
           </Alert>
         )}
 
-        <div className="flex gap-4 mb-6">
-          <Button 
-            onClick={() => handleOpenDialog()}
-            disabled={submitting || deletingId !== null || uploading}
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Add Record
-          </Button>
-          <Button 
-            variant="outline" 
-            onClick={() => setUploadDialogOpen(true)}
-            disabled={submitting || deletingId !== null || uploading}
-          >
-            <Upload className="mr-2 h-4 w-4" />
-            Upload Grades
-          </Button>
-          <Button 
-            variant="outline" 
-            onClick={handleSyncSubjectEmails}
-            disabled={submitting || deletingId !== null || uploading || syncingEmails}
-          >
-            {syncingEmails ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Syncing...
-              </>
-            ) : (
-              <>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Sync Emails for This Subject
-              </>
-            )}
-          </Button>
-          <Button 
-            variant="outline" 
-            onClick={() => setMoodleSyncDialogOpen(true)}
-            disabled={submitting || deletingId !== null || uploading || syncingEmails}
-          >
-            Configure Moodle
-          </Button>
-          <Button
-            variant="default"
-            onClick={() => handleSendEmailsClick(false)}
-            disabled={sendingEmails || records.length === 0 || submitting || deletingId !== null || uploading || syncingEmails}
-          >
-            {sendingEmails ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Sending...
-              </>
-            ) : (
-              <>
-                <Mail className="mr-2 h-4 w-4" />
-                Send Access Codes
-              </>
-            )}
-          </Button>
-        </div>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="grid w-full grid-cols-3 mb-6">
+            <TabsTrigger value="records" className="flex items-center gap-2">
+              <BookOpen className="h-4 w-4" />
+              Records
+            </TabsTrigger>
+            <TabsTrigger value="grading" className="flex items-center gap-2">
+              <Calculator className="h-4 w-4" />
+              Grading
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="flex items-center gap-2">
+              <Settings className="h-4 w-4" />
+              Settings
+            </TabsTrigger>
+          </TabsList>
 
-        {/* Persistent Google Sheets Link */}
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="text-lg">Google Sheets Link</CardTitle>
-            <CardDescription>
-              Set a persistent Google Sheets URL to quickly update grades from the same sheet
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <Input
-                    placeholder="https://docs.google.com/spreadsheets/d/..."
-                    value={persistentSheetUrl}
-                    onChange={(e) => {
-                      setPersistentSheetUrl(e.target.value);
-                      // Save to localStorage on change
-                      if (e.target.value.trim()) {
-                        localStorage.setItem(`googleSheetUrl_${subjectId}`, e.target.value.trim());
-                      } else {
-                        localStorage.removeItem(`googleSheetUrl_${subjectId}`);
-                      }
-                    }}
-                    disabled={uploading}
-                  />
-                </div>
-                <Button
-                  onClick={handleUpdateFromPersistentSheet}
-                  disabled={uploading || submitting || deletingId !== null}
-                >
-                  {uploading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Updating...
-                    </>
-                  ) : (
-                    <>
-                      <FileSpreadsheet className="mr-2 h-4 w-4" />
-                      Update from Sheet
-                    </>
-                  )}
-                </Button>
-              </div>
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="clear-all-before-import"
-                  checked={clearAllBeforeImport}
-                  onCheckedChange={(checked) => setClearAllBeforeImport(checked === true)}
-                  disabled={uploading}
-                />
-                <Label
-                  htmlFor="clear-all-before-import"
-                  className="text-sm font-normal cursor-pointer"
-                >
-                  Clear all existing records before importing
-                </Label>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle>Grade Records</CardTitle>
+          <TabsContent value="records" className="space-y-6">
+            {/* Persistent Google Sheets Link */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Google Sheets Link</CardTitle>
                 <CardDescription>
-                  {filteredAndSortedRecords.length} of {records.length} record{records.length !== 1 ? "s" : ""} shown
+                  Set a persistent Google Sheets URL to quickly update grades from the same sheet
                 </CardDescription>
-              </div>
-            </div>
-            <div className="mt-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search by name, number, or email..."
-                  value={filterText}
-                  onChange={(e) => setFilterText(e.target.value)}
-                  className="pl-9 pr-9"
-                />
-                {filterText && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="absolute right-1 top-1/2 transform -translate-y-1/2 h-7 w-7"
-                    onClick={() => setFilterText("")}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {selectedRecords.size > 0 && (
-              <div className="mb-4 flex items-center justify-between p-3 bg-muted rounded-lg">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">
-                    {selectedRecords.size} record{selectedRecords.size !== 1 ? "s" : ""} selected
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={clearSelection}
-                    className="h-7"
-                  >
-                    Clear selection
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={() => handleSendEmailsClick(true)}
-                    disabled={sendingEmails || submitting || uploading || syncingEmails}
-                  >
-                    {sendingEmails ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Sending...
-                      </>
-                    ) : (
-                      <>
-                        <Mail className="mr-2 h-4 w-4" />
-                        Send Emails to Selected
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={handleBulkDeleteClick}
-                    disabled={deletingId === "bulk" || submitting || uploading}
-                  >
-                    {deletingId === "bulk" ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Deleting...
-                      </>
-                    ) : (
-                      <>
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete Selected
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </div>
-            )}
-            <div 
-              ref={tableScrollRef}
-              className="overflow-x-auto relative"
-              onScroll={() => {
-                if (tableScrollRef.current) {
-                  const { scrollLeft, scrollWidth, clientWidth } = tableScrollRef.current;
-                  // Hide hint when scrolled to the right
-                  setShowScrollHint(scrollLeft < scrollWidth - clientWidth - 10);
-                }
-              }}
-            >
-              {/* Gradient fade effect to indicate scrollable content */}
-              {showScrollHint && (
-                <div className="absolute right-0 top-0 bottom-0 w-24 pointer-events-none z-20 bg-gradient-to-l from-background via-background/80 to-transparent" />
-              )}
-              {/* Scroll hint indicator */}
-              {showScrollHint && (
-                <div className="absolute right-[140px] top-1/2 -translate-y-1/2 z-20 pointer-events-none animate-pulse">
-                  <div className="flex items-center gap-1 text-muted-foreground text-xs bg-background/90 backdrop-blur-sm px-2 py-1 rounded-full border border-border/50 shadow-sm">
-                    <span>← Scroll</span>
-                    <div className="h-1 w-1 rounded-full bg-primary animate-pulse" />
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <Input
+                        placeholder="https://docs.google.com/spreadsheets/d/..."
+                        value={persistentSheetUrl}
+                        onChange={(e) => {
+                          setPersistentSheetUrl(e.target.value);
+                          // Save to localStorage on change
+                          if (e.target.value.trim()) {
+                            localStorage.setItem(`googleSheetUrl_${subjectId}`, e.target.value.trim());
+                          } else {
+                            localStorage.removeItem(`googleSheetUrl_${subjectId}`);
+                          }
+                        }}
+                        disabled={uploading}
+                      />
+                    </div>
+                    <Button
+                      onClick={handleUpdateFromPersistentSheet}
+                      disabled={uploading || submitting || deletingId !== null}
+                    >
+                      {uploading ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Updating...
+                        </>
+                      ) : (
+                        <>
+                          <FileSpreadsheet className="mr-2 h-4 w-4" />
+                          Update from Sheet
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="clear-all-before-import"
+                      checked={clearAllBeforeImport}
+                      onCheckedChange={(checked) => setClearAllBeforeImport(checked === true)}
+                      disabled={uploading}
+                    />
+                    <Label
+                      htmlFor="clear-all-before-import"
+                      className="text-sm font-normal cursor-pointer"
+                    >
+                      Clear all existing records before importing
+                    </Label>
                   </div>
                 </div>
-              )}
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-12" rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
-                      <div className="flex items-center">
-                        <Checkbox
-                          checked={isAllSelected}
-                          indeterminate={isIndeterminate}
-                          onCheckedChange={toggleSelectAll}
-                          disabled={filteredAndSortedRecords.length === 0}
-                        />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Grade Records</CardTitle>
+                    <CardDescription>
+                      {filteredAndSortedRecords.length} of {records.length} record{records.length !== 1 ? "s" : ""} shown
+                    </CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button 
+                      onClick={() => handleOpenDialog()}
+                      disabled={submitting || deletingId !== null || uploading}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Record
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      onClick={() => setUploadDialogOpen(true)}
+                      disabled={submitting || deletingId !== null || uploading}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      Upload Grades
+                    </Button>
+                  </div>
+                </div>
+                <div className="mt-4">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search by name, number, or email..."
+                      value={filterText}
+                      onChange={(e) => setFilterText(e.target.value)}
+                      className="pl-9 pr-9"
+                    />
+                    {filterText && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 transform -translate-y-1/2 h-7 w-7"
+                        onClick={() => setFilterText("")}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {selectedRecords.size > 0 && (
+                  <div className="mb-4 flex items-center justify-between p-3 bg-muted rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">
+                        {selectedRecords.size} record{selectedRecords.size !== 1 ? "s" : ""} selected
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={clearSelection}
+                        className="h-7"
+                      >
+                        Clear selection
+                      </Button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() => handleSendEmailsClick(true)}
+                        disabled={sendingEmails || submitting || uploading || syncingEmails}
+                      >
+                        {sendingEmails ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Sending...
+                          </>
+                        ) : (
+                          <>
+                            <Mail className="mr-2 h-4 w-4" />
+                            Send Emails to Selected
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={handleBulkDeleteClick}
+                        disabled={deletingId === "bulk" || submitting || uploading}
+                      >
+                        {deletingId === "bulk" ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Deleting...
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete Selected
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                <div 
+                  ref={tableScrollRef}
+                  className="overflow-x-auto relative"
+                  onScroll={() => {
+                    if (tableScrollRef.current) {
+                      const { scrollLeft, scrollWidth, clientWidth } = tableScrollRef.current;
+                      // Hide hint when scrolled to the right
+                      setShowScrollHint(scrollLeft < scrollWidth - clientWidth - 10);
+                    }
+                  }}
+                >
+                  {/* Gradient fade effect to indicate scrollable content */}
+                  {showScrollHint && (
+                    <div className="absolute right-0 top-0 bottom-0 w-24 pointer-events-none z-20 bg-gradient-to-l from-background via-background/80 to-transparent" />
+                  )}
+                  {/* Scroll hint indicator */}
+                  {showScrollHint && (
+                    <div className="absolute right-[140px] top-1/2 -translate-y-1/2 z-20 pointer-events-none animate-pulse">
+                      <div className="flex items-center gap-1 text-muted-foreground text-xs bg-background/90 backdrop-blur-sm px-2 py-1 rounded-full border border-border/50 shadow-sm">
+                        <span>← Scroll</span>
+                        <div className="h-1 w-1 rounded-full bg-primary animate-pulse" />
                       </div>
-                    </TableHead>
-                    <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="-ml-3 h-8 hover:bg-accent font-medium"
-                        onClick={() => handleSort("student_name")}
-                      >
-                        Student Name
-                        {getSortIcon("student_name")}
-                      </Button>
-                    </TableHead>
-                    <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="-ml-3 h-8 hover:bg-accent font-medium"
-                        onClick={() => handleSort("student_number")}
-                      >
-                        Student Number
-                        {getSortIcon("student_number")}
-                      </Button>
-                    </TableHead>
-                    <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="-ml-3 h-8 hover:bg-accent font-medium"
-                        onClick={() => handleSort("email")}
-                      >
-                        Email
-                        {getSortIcon("email")}
-                      </Button>
-                    </TableHead>
-                    <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="-ml-3 h-8 hover:bg-accent font-medium"
-                        onClick={() => handleSort("code")}
-                      >
-                        Access Code
-                        {getSortIcon("code")}
-                      </Button>
-                    </TableHead>
-                    {gradeKeys.map((key) => (
-                      <TableHead key={key} className="text-center">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 hover:bg-accent font-medium"
-                          onClick={() => handleSort(key)}
-                        >
-                          {key}
-                          {getSortIcon(key)}
-                        </Button>
-                      </TableHead>
-                    ))}
-                    <TableHead className="text-right sticky right-0 z-30 bg-background/95 backdrop-blur-sm min-w-[120px] border-l-2 border-border/50 shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.1),_-2px_0_8px_-2px_rgba(0,0,0,0.05)] dark:shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.3),_-2px_0_8px_-2px_rgba(0,0,0,0.2)]" rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
-                      <div className="flex items-center justify-end gap-1">
-                        <span>Actions</span>
-                        <div className="h-4 w-4 rounded-full bg-primary/10 flex items-center justify-center">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary/40" />
-                        </div>
-                      </div>
-                    </TableHead>
-                  </TableRow>
-                  {records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 && (
-                    <TableRow>
-                      {/* Empty cells for columns that span 2 rows (Checkbox, Name, Number, Email, Code) */}
-                      {/* These are automatically skipped due to rowSpan, but we need to account for them */}
-                      {/* Then add max score cells for grade columns */}
-                      {gradeKeys.map((key) => (
-                        <TableHead key={key} className="text-center text-xs text-muted-foreground font-normal">
-                          / {records[0].max_scores![key] ?? "-"}
+                    </div>
+                  )}
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-12" rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
+                          <div className="flex items-center">
+                            <Checkbox
+                              checked={isAllSelected}
+                              indeterminate={isIndeterminate}
+                              onCheckedChange={toggleSelectAll}
+                              disabled={filteredAndSortedRecords.length === 0}
+                            />
+                          </div>
                         </TableHead>
-                      ))}
-                      {/* Note: Actions column is handled by rowSpan, so no cell needed here */}
-                    </TableRow>
-                  )}
-                </TableHeader>
-                <TableBody>
-                  {filteredAndSortedRecords.length === 0 ? (
-                    <TableRow>
-                      <TableCell
-                        colSpan={6 + gradeKeys.length + 1}
-                        className="text-center text-muted-foreground"
-                      >
-                        {filterText ? "No records match your search." : "No records found. Add your first record or upload a file."}
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    filteredAndSortedRecords.map((record) => (
-                      <TableRow key={record.id}>
-                        <TableCell>
-                          <Checkbox
-                            checked={selectedRecords.has(record.id)}
-                            onCheckedChange={() => toggleRecordSelection(record.id)}
-                            disabled={deletingId === record.id || submitting || uploading}
-                          />
-                        </TableCell>
-                        <TableCell>{record.student_name}</TableCell>
-                        <TableCell>{record.student_number}</TableCell>
-                        <TableCell>
-                          {editingEmailId === record.id ? (
-                            <div className="flex items-center gap-1 min-w-[200px]">
-                              <Input
-                                type="email"
-                                value={editingEmailValue}
-                                onChange={(e) => setEditingEmailValue(e.target.value)}
-                                onBlur={() => handleEmailBlur(record.id)}
-                                onKeyDown={(e) => handleEmailKeyDown(e, record.id)}
-                                className="h-8 text-sm"
-                                disabled={savingEmailId === record.id}
-                                placeholder="student@example.com"
-                                autoFocus
-                                onFocus={(e) => e.target.select()}
-                              />
-                              {savingEmailId === record.id && (
-                                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" />
-                              )}
-                            </div>
-                          ) : (
-                            <div
-                              className="cursor-pointer hover:bg-muted/50 px-2 py-1 rounded -mx-2 -my-1 transition-colors min-h-[32px] flex items-center"
-                              onClick={() => handleEmailEditStart(record)}
-                              title="Click to edit email"
-                            >
-                              {record.email || <span className="text-muted-foreground italic">Click to add email</span>}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-sm">
-                              {record.code && record.code.trim() ? record.code : "-"}
-                            </span>
-                            <div className="flex items-center gap-1">
-                              {record.code && record.code.trim() && (
-                                <>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-8 w-8 p-0"
-                                    onClick={() => handleCopyCode(record.id, record.code)}
-                                    disabled={deletingId === record.id || submitting || uploading || regeneratingCodeId === record.id}
-                                    aria-label="Copy access code"
-                                  >
-                                    {copiedRecordId === record.id ? (
-                                      <Check className="h-4 w-4 text-primary" />
-                                    ) : (
-                                      <Copy className="h-4 w-4" />
-                                    )}
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-8 w-8 p-0"
-                                    onClick={() => handleRegenerateCode(record.id)}
-                                    disabled={deletingId === record.id || submitting || uploading || regeneratingCodeId === record.id}
-                                    aria-label="Regenerate access code"
-                                    title="Regenerate access code"
-                                  >
-                                    {regeneratingCodeId === record.id ? (
-                                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                                    ) : (
-                                      <RefreshCw className="h-4 w-4" />
-                                    )}
-                                  </Button>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        </TableCell>
+                        <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="-ml-3 h-8 hover:bg-accent font-medium"
+                            onClick={() => handleSort("student_name")}
+                          >
+                            Student Name
+                            {getSortIcon("student_name")}
+                          </Button>
+                        </TableHead>
+                        <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="-ml-3 h-8 hover:bg-accent font-medium"
+                            onClick={() => handleSort("student_number")}
+                          >
+                            Student Number
+                            {getSortIcon("student_number")}
+                          </Button>
+                        </TableHead>
+                        <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="-ml-3 h-8 hover:bg-accent font-medium"
+                            onClick={() => handleSort("email")}
+                          >
+                            Email
+                            {getSortIcon("email")}
+                          </Button>
+                        </TableHead>
+                        <TableHead rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="-ml-3 h-8 hover:bg-accent font-medium"
+                            onClick={() => handleSort("code")}
+                          >
+                            Access Code
+                            {getSortIcon("code")}
+                          </Button>
+                        </TableHead>
                         {gradeKeys.map((key) => (
-                          <TableCell key={key} className="text-center">
-                            {record.grades?.[key] ?? "-"}
-                          </TableCell>
+                          <TableHead key={key} className="text-center">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 hover:bg-accent font-medium"
+                              onClick={() => handleSort(key)}
+                            >
+                              {key}
+                              {getSortIcon(key)}
+                            </Button>
+                          </TableHead>
                         ))}
-                        <TableCell className="text-right sticky right-0 z-30 bg-background/95 backdrop-blur-sm min-w-[120px] border-l-2 border-border/50 shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.1),_-2px_0_8px_-2px_rgba(0,0,0,0.05)] dark:shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.3),_-2px_0_8px_-2px_rgba(0,0,0,0.2)]">
-                          <div className="flex justify-end gap-2">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleOpenDialog(record)}
-                              disabled={deletingId === record.id || submitting || uploading || regeneratingCodeId === record.id}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleDeleteClick(record.id)}
-                              disabled={deletingId === record.id || submitting || uploading || regeneratingCodeId === record.id}
-                            >
-                              {deletingId === record.id ? (
-                                <Loader2 className="h-4 w-4 text-destructive animate-spin" />
-                              ) : (
-                                <Trash2 className="h-4 w-4 text-destructive" />
-                              )}
-                            </Button>
+                        <TableHead className="text-right sticky right-0 z-30 bg-background/95 backdrop-blur-sm min-w-[120px] border-l-2 border-border/50 shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.1),_-2px_0_8px_-2px_rgba(0,0,0,0.05)] dark:shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.3),_-2px_0_8px_-2px_rgba(0,0,0,0.2)]" rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
+                          <div className="flex items-center justify-end gap-1">
+                            <span>Actions</span>
+                            <div className="h-4 w-4 rounded-full bg-primary/10 flex items-center justify-center">
+                              <div className="h-1.5 w-1.5 rounded-full bg-primary/40" />
+                            </div>
                           </div>
-                        </TableCell>
+                        </TableHead>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
+                      {records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 && (
+                        <TableRow>
+                          {/* Empty cells for columns that span 2 rows (Checkbox, Name, Number, Email, Code) */}
+                          {/* These are automatically skipped due to rowSpan, but we need to account for them */}
+                          {/* Then add max score cells for grade columns */}
+                          {gradeKeys.map((key) => (
+                            <TableHead key={key} className="text-center text-xs text-muted-foreground font-normal">
+                              / {records[0].max_scores![key] ?? "-"}
+                            </TableHead>
+                          ))}
+                          {/* Note: Actions column is handled by rowSpan, so no cell needed here */}
+                        </TableRow>
+                      )}
+                    </TableHeader>
+                    <TableBody>
+                      {filteredAndSortedRecords.length === 0 ? (
+                        <TableRow>
+                          <TableCell
+                            colSpan={6 + gradeKeys.length + 1}
+                            className="text-center text-muted-foreground"
+                          >
+                            {filterText ? "No records match your search." : "No records found. Add your first record or upload a file."}
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        filteredAndSortedRecords.map((record) => (
+                          <TableRow key={record.id}>
+                            <TableCell>
+                              <Checkbox
+                                checked={selectedRecords.has(record.id)}
+                                onCheckedChange={() => toggleRecordSelection(record.id)}
+                                disabled={deletingId === record.id || submitting || uploading}
+                              />
+                            </TableCell>
+                            <TableCell>{record.student_name}</TableCell>
+                            <TableCell>{record.student_number}</TableCell>
+                            <TableCell>
+                              {editingEmailId === record.id ? (
+                                <div className="flex items-center gap-1 min-w-[200px]">
+                                  <Input
+                                    type="email"
+                                    value={editingEmailValue}
+                                    onChange={(e) => setEditingEmailValue(e.target.value)}
+                                    onBlur={() => handleEmailBlur(record.id)}
+                                    onKeyDown={(e) => handleEmailKeyDown(e, record.id)}
+                                    className="h-8 text-sm"
+                                    disabled={savingEmailId === record.id}
+                                    placeholder="student@example.com"
+                                    autoFocus
+                                    onFocus={(e) => e.target.select()}
+                                  />
+                                  {savingEmailId === record.id && (
+                                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" />
+                                  )}
+                                </div>
+                              ) : (
+                                <div
+                                  className="cursor-pointer hover:bg-muted/50 px-2 py-1 rounded -mx-2 -my-1 transition-colors min-h-[32px] flex items-center"
+                                  onClick={() => handleEmailEditStart(record)}
+                                  title="Click to edit email"
+                                >
+                                  {record.email || <span className="text-muted-foreground italic">Click to add email</span>}
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono text-sm">
+                                  {record.code && record.code.trim() ? record.code : "-"}
+                                </span>
+                                <div className="flex items-center gap-1">
+                                  {record.code && record.code.trim() && (
+                                    <>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8 p-0"
+                                        onClick={() => handleCopyCode(record.id, record.code)}
+                                        disabled={deletingId === record.id || submitting || uploading || regeneratingCodeId === record.id}
+                                        aria-label="Copy access code"
+                                      >
+                                        {copiedRecordId === record.id ? (
+                                          <Check className="h-4 w-4 text-primary" />
+                                        ) : (
+                                          <Copy className="h-4 w-4" />
+                                        )}
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8 p-0"
+                                        onClick={() => handleRegenerateCode(record.id)}
+                                        disabled={deletingId === record.id || submitting || uploading || regeneratingCodeId === record.id}
+                                        aria-label="Regenerate access code"
+                                        title="Regenerate access code"
+                                      >
+                                        {regeneratingCodeId === record.id ? (
+                                          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                                        ) : (
+                                          <RefreshCw className="h-4 w-4" />
+                                        )}
+                                      </Button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </TableCell>
+                            {gradeKeys.map((key) => (
+                              <TableCell key={key} className="text-center">
+                                {record.grades?.[key] ?? "-"}
+                              </TableCell>
+                            ))}
+                            <TableCell className="text-right sticky right-0 z-30 bg-background/95 backdrop-blur-sm min-w-[120px] border-l-2 border-border/50 shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.1),_-2px_0_8px_-2px_rgba(0,0,0,0.05)] dark:shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.3),_-2px_0_8px_-2px_rgba(0,0,0,0.2)]">
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleOpenDialog(record)}
+                                  disabled={deletingId === record.id || submitting || uploading || regeneratingCodeId === record.id}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleDeleteClick(record.id)}
+                                  disabled={deletingId === record.id || submitting || uploading || regeneratingCodeId === record.id}
+                                >
+                                  {deletingId === record.id ? (
+                                    <Loader2 className="h-4 w-4 text-destructive animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                  )}
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="grading" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Grading System</CardTitle>
+                    <CardDescription>Configure and compute final grades</CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={handleOpenGradingSystemDialog}
+                      disabled={submitting || deletingId !== null || uploading || syncingEmails}
+                    >
+                      <Settings className="mr-2 h-4 w-4" />
+                      Configure Grading System
+                    </Button>
+                    <Button
+                      variant="default"
+                      onClick={handleComputeGrades}
+                      disabled={computingGrades || records.length === 0 || submitting || deletingId !== null || uploading || syncingEmails || !gradingSystem}
+                    >
+                      {computingGrades ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Computing...
+                        </>
+                      ) : (
+                        <>
+                          <Calculator className="mr-2 h-4 w-4" />
+                          Compute Grades
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {gradingSystem ? (
+                  <div className="space-y-4">
+                    <div className="p-4 bg-muted/50 rounded-lg">
+                      <p className="text-sm text-muted-foreground">
+                        Grading system is configured. You can compute final grades for all students.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <Alert>
+                    <AlertDescription>
+                      No grading system configured. Click "Configure Grading System" to set up the grading structure for this subject.
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="settings" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Settings & Communication</CardTitle>
+                    <CardDescription>Configure Moodle integration and send access codes</CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button 
+                      variant="outline" 
+                      onClick={() => setMoodleSyncDialogOpen(true)}
+                      disabled={submitting || deletingId !== null || uploading || syncingEmails}
+                    >
+                      <Settings className="mr-2 h-4 w-4" />
+                      Configure Moodle
+                    </Button>
+                    <Button
+                      variant="default"
+                      onClick={() => handleSendEmailsClick(false)}
+                      disabled={sendingEmails || records.length === 0 || submitting || deletingId !== null || uploading || syncingEmails}
+                    >
+                      {sendingEmails ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        <>
+                          <Mail className="mr-2 h-4 w-4" />
+                          Send Access Codes
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Email Sync</Label>
+                  <Button 
+                    variant="outline" 
+                    onClick={handleSyncSubjectEmails}
+                    disabled={submitting || deletingId !== null || uploading || syncingEmails}
+                    className="w-full justify-start"
+                  >
+                    {syncingEmails ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Syncing...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                        Sync Emails for This Subject
+                      </>
+                    )}
+                  </Button>
+                  <p className="text-sm text-muted-foreground">
+                    Sync student emails from Moodle for this subject
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
 
         {/* Record Dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -2567,6 +2982,454 @@ export default function SubjectDetailPage() {
                 </Button>
               </div>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Grading System Configuration Dialog */}
+        <Dialog open={gradingSystemDialogOpen} onOpenChange={setGradingSystemDialogOpen} size="full">
+          <DialogContent className="max-h-[95vh] overflow-hidden flex flex-col p-0">
+            <DialogHeader className="pb-4 border-b px-6 pt-6">
+              <DialogTitle className="text-2xl">
+                Configure Grading System
+                {subject?.name && (
+                  <span className="text-xl font-normal text-muted-foreground ml-2">
+                    - {subject.name}
+                  </span>
+                )}
+              </DialogTitle>
+              <DialogDescription className="text-base mt-2">
+                Set up the grading system for this subject. Map grade columns to components and adjust weights.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex-1 overflow-y-auto px-6">
+            {gradingSystem && gradingSystem.categories && Array.isArray(gradingSystem.categories) && gradingSystem.categories.length > 0 ? (
+              <div className="space-y-6 py-4">
+                {/* Grade Key Mapping Section */}
+                {gradeKeys.length > 0 ? (
+                  <Card className="shadow-sm">
+                    <CardHeader 
+                      className="bg-muted/50 pb-3 cursor-pointer hover:bg-muted/70 transition-colors"
+                      onClick={() => setGradeMappingExpanded(!gradeMappingExpanded)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 flex-1">
+                          <CardTitle className="text-xl flex items-center gap-2">
+                            <span className="text-2xl">📊</span>
+                            Map Grade Columns to Components
+                          </CardTitle>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setGradeMappingExpanded(!gradeMappingExpanded);
+                          }}
+                        >
+                          {gradeMappingExpanded ? (
+                            <ChevronUp className="h-5 w-5" />
+                          ) : (
+                            <ChevronDown className="h-5 w-5" />
+                          )}
+                        </Button>
+                      </div>
+                      <CardDescription className="text-base mt-1">
+                        Select which component each grade column belongs to. Each column can only be assigned to one component (1:1 mapping).
+                      </CardDescription>
+                    </CardHeader>
+                    {gradeMappingExpanded && (
+                      <CardContent className="pt-6">
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        {gradeKeys.map((gradeKey) => {
+                          const selectedComponents = getGradeKeyComponents(gradeKey);
+                          
+                          return (
+                            <div key={gradeKey} className="border-2 rounded-xl p-5 space-y-4 bg-card hover:border-primary/50 transition-colors">
+                              <div className="flex items-center justify-between pb-2 border-b">
+                                <Label className="text-lg font-bold text-foreground">{gradeKey}</Label>
+                                <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-sm font-medium">
+                                  {selectedComponents.length > 0 ? (
+                                    <>
+                                      <Check className="h-4 w-4" />
+                                      {selectedComponents.length} component{selectedComponents.length !== 1 ? "s" : ""}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <X className="h-4 w-4" />
+                                      Not assigned
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="space-y-4">
+                                {/* Unassigned option */}
+                                <div className="space-y-2 pb-2 border-b">
+                                  <div 
+                                    className={`flex items-center space-x-3 p-2 rounded-lg transition-colors ${
+                                      selectedComponents.length === 0 ? 'bg-muted border border-muted-foreground/20' : 'hover:bg-muted/50'
+                                    }`}
+                                  >
+                                    <input
+                                      type="radio"
+                                      id={`${gradeKey}-unassigned`}
+                                      name={`gradeKey-${gradeKey}`}
+                                      checked={selectedComponents.length === 0}
+                                      onChange={() => {
+                                        // Remove from all components
+                                        if (!gradingSystem || !gradingSystem.categories || !Array.isArray(gradingSystem.categories)) return;
+                                        const updatedSystem: GradingSystem = {
+                                          ...gradingSystem,
+                                          categories: gradingSystem.categories.map((category) => ({
+                                            ...category,
+                                            components: (category.components || []).map((component) => ({
+                                              ...component,
+                                              gradeKeys: (component.gradeKeys || []).filter((k) => k !== gradeKey),
+                                            })),
+                                          })),
+                                        };
+                                        setGradingSystem(updatedSystem);
+                                      }}
+                                      className="h-5 w-5 cursor-pointer"
+                                    />
+                                    <Label
+                                      htmlFor={`${gradeKey}-unassigned`}
+                                      className="text-sm font-medium cursor-pointer flex-1 text-muted-foreground"
+                                    >
+                                      Unassigned
+                                    </Label>
+                                  </div>
+                                </div>
+                                {gradingSystem.categories.map((category) => (
+                                  <div key={category.id} className="space-y-2">
+                                    <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                                      {category.name}
+                                    </Label>
+                                    <div className="space-y-2 pl-1">
+                                      {(category.components || []).map((component) => {
+                                        const isSelected = selectedComponents.includes(component.id);
+                                        return (
+                                          <div 
+                                            key={component.id} 
+                                            className={`flex items-center space-x-3 p-2 rounded-lg transition-colors ${
+                                              isSelected ? 'bg-primary/10 border border-primary/20' : 'hover:bg-muted/50'
+                                            }`}
+                                          >
+                                            <input
+                                              type="radio"
+                                              id={`${gradeKey}-${component.id}`}
+                                              name={`gradeKey-${gradeKey}`}
+                                              checked={isSelected}
+                                              onChange={() => assignGradeKeyToComponent(gradeKey, component.id)}
+                                              className="h-5 w-5 cursor-pointer"
+                                            />
+                                            <Label
+                                              htmlFor={`${gradeKey}-${component.id}`}
+                                              className="text-sm font-medium cursor-pointer flex-1 flex items-center justify-between"
+                                            >
+                                              <span>{component.name}</span>
+                                              <span className="text-xs text-muted-foreground ml-2">
+                                                {component.weight || 0}%
+                                              </span>
+                                            </Label>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      </CardContent>
+                    )}
+                  </Card>
+                ) : (
+                  <Alert className="border-2">
+                    <AlertDescription className="text-base py-2">
+                      No grade columns found. Add grade records first to configure the grading system.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {/* Category and Component Configuration Section */}
+                <Card className="shadow-sm">
+                  <CardHeader 
+                    className="bg-muted/50 pb-3 cursor-pointer hover:bg-muted/70 transition-colors"
+                    onClick={() => setWeightsExpanded(!weightsExpanded)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 flex-1">
+                        <CardTitle className="text-xl flex items-center gap-2">
+                          <span className="text-2xl">⚖️</span>
+                          Category and Component Weights
+                        </CardTitle>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setWeightsExpanded(!weightsExpanded);
+                        }}
+                      >
+                        {weightsExpanded ? (
+                          <ChevronUp className="h-5 w-5" />
+                        ) : (
+                          <ChevronDown className="h-5 w-5" />
+                        )}
+                      </Button>
+                    </div>
+                    <CardDescription className="text-base mt-1">
+                      Adjust weights for categories and components. Category weights must sum to 100%, and component weights within each category must sum to the category weight.
+                    </CardDescription>
+                  </CardHeader>
+                  {weightsExpanded && (
+                    <CardContent className="pt-6 space-y-6">
+                    {gradingSystem.categories.map((category) => {
+                      const categoryComponents = category.components || [];
+                      const totalComponentWeight = categoryComponents.reduce((sum, comp) => sum + (comp.weight || 0), 0);
+                      const isWeightValid = Math.abs(totalComponentWeight - (category.weight || 0)) < 0.01;
+                      
+                      return (
+                        <Card key={category.id} className="border-2">
+                          <CardHeader className="pb-4">
+                            <div className="flex items-center justify-between flex-wrap gap-4">
+                              <div className="flex-1">
+                                <CardTitle className="text-lg mb-1">{category.name}</CardTitle>
+                                <CardDescription className="flex items-center gap-2">
+                                  <span>Current weight: <strong>{category.weight || 0}%</strong></span>
+                                  {!isWeightValid && (
+                                    <span className="text-destructive text-xs">
+                                      (Components sum to {totalComponentWeight}%)
+                                    </span>
+                                  )}
+                                </CardDescription>
+                              </div>
+                              <div className="flex items-center gap-3 bg-muted/50 px-4 py-2 rounded-lg">
+                                <Label className="font-medium whitespace-nowrap">Category Weight:</Label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  value={category.weight || 0}
+                                  onChange={(e) => {
+                                    const newWeight = parseFloat(e.target.value) || 0;
+                                    const updatedSystem: GradingSystem = {
+                                      ...gradingSystem,
+                                      categories: (gradingSystem.categories || []).map((cat) =>
+                                        cat.id === category.id ? { ...cat, weight: newWeight } : cat
+                                      ),
+                                    };
+                                    setGradingSystem(updatedSystem);
+                                  }}
+                                  className="w-24 text-center font-semibold"
+                                />
+                                <span className="font-medium">%</span>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="space-y-3">
+                            {categoryComponents.map((component) => {
+                              const assignedKeys = component.gradeKeys || [];
+                              return (
+                                <div key={component.id} className="border rounded-xl p-4 space-y-3 bg-card">
+                                  <div className="flex items-center justify-between flex-wrap gap-3">
+                                    <div className="flex-1 min-w-[200px]">
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <div className="flex-1">
+                                          <Label className="text-xs text-muted-foreground mb-1 block">Component Name</Label>
+                                          <Input
+                                            type="text"
+                                            value={component.name}
+                                            onChange={(e) => updateComponentName(category.id, component.id, e.target.value)}
+                                            className="text-base font-semibold h-9 px-3 border-2 focus:border-primary"
+                                            placeholder="Enter component name"
+                                          />
+                                        </div>
+                                        <div className="pt-6">
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-9 w-9 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                            onClick={() => removeComponentFromCategory(category.id, component.id)}
+                                            title="Remove component"
+                                          >
+                                            <Minus className="h-4 w-4" />
+                                          </Button>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                                        <span>Weight: <strong>{component.weight || 0}%</strong></span>
+                                        <span>•</span>
+                                        <span>{assignedKeys.length} column{assignedKeys.length !== 1 ? "s" : ""} assigned</span>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-3 bg-muted/30 px-4 py-2 rounded-lg">
+                                      <Label className="text-sm font-medium whitespace-nowrap">Component Weight:</Label>
+                                      <Input
+                                        type="number"
+                                        min="0"
+                                        max={category.weight || 0}
+                                        value={component.weight || 0}
+                                        onChange={(e) => {
+                                          const newWeight = parseFloat(e.target.value) || 0;
+                                          const updatedSystem: GradingSystem = {
+                                            ...gradingSystem,
+                                            categories: (gradingSystem.categories || []).map((cat) =>
+                                              cat.id === category.id
+                                                ? {
+                                                    ...cat,
+                                                    components: (cat.components || []).map((comp) =>
+                                                      comp.id === component.id ? { ...comp, weight: newWeight } : comp
+                                                    ),
+                                                  }
+                                                : cat
+                                            ),
+                                          };
+                                          setGradingSystem(updatedSystem);
+                                        }}
+                                        className="w-20 text-center font-semibold"
+                                      />
+                                      <span className="text-sm font-medium">%</span>
+                                    </div>
+                                  </div>
+                                  {assignedKeys.length > 0 && (
+                                    <div className="flex flex-wrap gap-2 pt-2 border-t">
+                                      <span className="text-xs text-muted-foreground font-medium">Assigned columns:</span>
+                                      {assignedKeys.map((key) => (
+                                        <span
+                                          key={key}
+                                          className="px-2.5 py-1 bg-primary/10 text-primary rounded-md text-sm font-medium"
+                                        >
+                                          {key}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                            <Button
+                              variant="outline"
+                              className="w-full mt-4"
+                              onClick={() => addComponentToCategory(category.id)}
+                            >
+                              <Plus className="h-4 w-4 mr-2" />
+                              Add Component to {category.name}
+                            </Button>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                    </CardContent>
+                  )}
+                </Card>
+              </div>
+            ) : (
+              <Alert className="border-2 my-4">
+                <AlertDescription className="text-base py-2">
+                  Grading system is not properly configured. Please initialize it with the default structure.
+                </AlertDescription>
+              </Alert>
+            )}
+            </div>
+            {gradingSystem && gradingSystem.categories && Array.isArray(gradingSystem.categories) && gradingSystem.categories.length > 0 && (
+              <div className="flex justify-end gap-3 pt-4 border-t bg-muted/30 px-6 py-4 mt-auto">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setGradingSystemDialogOpen(false)}
+                    disabled={savingGradingSystem}
+                    size="lg"
+                    className="min-w-[120px]"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleSaveGradingSystem}
+                    disabled={savingGradingSystem}
+                    size="lg"
+                    className="min-w-[180px]"
+                  >
+                    {savingGradingSystem ? (
+                      <>
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="mr-2 h-5 w-5" />
+                        Save Grading System
+                      </>
+                    )}
+                  </Button>
+                </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Computed Grades Dialog */}
+        <Dialog open={computedGradesDialogOpen} onOpenChange={setComputedGradesDialogOpen}>
+          <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Computed Grades</DialogTitle>
+              <DialogDescription>
+                Final grades computed based on the configured grading system
+              </DialogDescription>
+            </DialogHeader>
+            {computedGrades && computedGrades.length > 0 && (
+              <div className="space-y-4">
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Student Name</TableHead>
+                        <TableHead>Student Number</TableHead>
+                        {gradingSystem?.categories.map((category) => (
+                          <TableHead key={category.id} className="text-center">
+                            {category.name} ({category.weight}%)
+                          </TableHead>
+                        ))}
+                        <TableHead className="text-center font-bold">Final Grade</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {computedGrades.map((computed: any) => (
+                        <TableRow key={computed.recordId}>
+                          <TableCell>{computed.studentName}</TableCell>
+                          <TableCell>{computed.studentNumber}</TableCell>
+                          {gradingSystem?.categories.map((category) => {
+                            const categoryScore = computed.categoryScores[category.id];
+                            return (
+                              <TableCell key={category.id} className="text-center">
+                                {categoryScore ? `${categoryScore.score.toFixed(2)}%` : "-"}
+                              </TableCell>
+                            );
+                          })}
+                          <TableCell className="text-center font-bold">
+                            {computed.finalGrade.toFixed(2)}%
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <div className="flex justify-end gap-2 pt-4 border-t">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setComputedGradesDialogOpen(false)}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       </div>
