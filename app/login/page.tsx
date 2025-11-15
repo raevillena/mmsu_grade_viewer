@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Info } from "lucide-react";
+import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -109,7 +110,13 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4 relative">
-      <div className="absolute top-4 right-4">
+      <div className="absolute top-4 right-4 flex items-center gap-2">
+        <Button variant="ghost" size="sm" asChild>
+          <Link href="/about" className="flex items-center gap-2">
+            <Info className="h-4 w-4" />
+            About
+          </Link>
+        </Button>
         <ThemeToggle />
       </div>
       <Card className="w-full max-w-md">

@@ -145,6 +145,7 @@ export async function POST(
         studentNumber: record.student_number,
         finalGrade,
         categoryScores,
+        passingGrade: gradingSystem.passing_grade ?? 50,
         breakdown: gradingSystem.categories.map((category) => ({
           categoryId: category.id,
           categoryName: category.name,

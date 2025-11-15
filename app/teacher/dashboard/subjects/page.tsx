@@ -12,7 +12,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { type Subject } from "@/lib/types";
-import { Plus, Edit, Trash2, LogOut, BookOpen, Upload, FileSpreadsheet, Link, Loader2 } from "lucide-react";
+import { Plus, Edit, Trash2, LogOut, BookOpen, Upload, FileSpreadsheet, Link as LinkIcon, Loader2, Info } from "lucide-react";
+import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
 import * as XLSX from "xlsx";
 
@@ -416,6 +417,12 @@ export default function TeacherSubjectsPage() {
             <p className="text-muted-foreground mt-1">Manage your subjects</p>
           </div>
           <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/about" className="flex items-center gap-2">
+                <Info className="h-4 w-4" />
+                About
+              </Link>
+            </Button>
             <ThemeToggle />
             <Button variant="outline" onClick={handleLogout}>
               <LogOut className="mr-2 h-4 w-4" />
@@ -622,7 +629,7 @@ export default function TeacherSubjectsPage() {
               {/* Google Sheets Import */}
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <Link className="h-5 w-5 text-muted-foreground" />
+                  <LinkIcon className="h-5 w-5 text-muted-foreground" />
                   <Label className="text-base font-semibold">Import from Google Sheets</Label>
                 </div>
                 <div className="space-y-2">

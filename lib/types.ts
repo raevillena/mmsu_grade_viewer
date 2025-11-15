@@ -42,6 +42,7 @@ export interface GradingCategory {
 export interface GradingSystem {
   categories: GradingCategory[]; // Array of categories
   version?: string; // Optional version identifier
+  passing_grade?: number; // Minimum grade to pass (default: 50)
 }
 
 /**
@@ -58,6 +59,13 @@ export interface Subject {
 /**
  * Grade record model matching the Supabase schema
  */
+export interface ComputedGrade {
+  finalGrade: number;
+  categoryScores: Record<string, { score: number; maxScore: number; weight: number }>;
+  breakdown: any[];
+  computedAt: string;
+}
+
 export interface GradeRecord {
   id: string;
   subject_id: string;
@@ -67,6 +75,7 @@ export interface GradeRecord {
   code: string;
   grades: globalThis.Record<string, number>; // JSONB in database, typed as Record<string, number>
   max_scores?: globalThis.Record<string, number>; // JSONB in database, max score per grade key (from second row of sheets)
+  computed_grade?: ComputedGrade; // JSONB in database, computed final grade and breakdown
   created_at: string;
   updated_at?: string;
 }

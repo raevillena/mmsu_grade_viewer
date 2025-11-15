@@ -1752,6 +1752,7 @@ export default function SubjectDetailPage() {
           ],
         },
       ],
+      passing_grade: 50, // Default passing grade
     };
   };
 
@@ -1863,6 +1864,8 @@ export default function SubjectDetailPage() {
         toast.success("Grades computed", {
           description: `Computed grades for ${data.data.computedGrades.length} student(s).`,
         });
+        // Refresh records to show updated computed grades
+        fetchRecords();
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to compute grades";
@@ -2292,6 +2295,9 @@ export default function SubjectDetailPage() {
                             </Button>
                           </TableHead>
                         ))}
+                        <TableHead className="text-center font-bold" rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
+                          Final Grade
+                        </TableHead>
                         <TableHead className="text-right sticky right-0 z-30 bg-background/95 backdrop-blur-sm min-w-[120px] border-l-2 border-border/50 shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.1),_-2px_0_8px_-2px_rgba(0,0,0,0.05)] dark:shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.3),_-2px_0_8px_-2px_rgba(0,0,0,0.2)]" rowSpan={records.length > 0 && records[0].max_scores && Object.keys(records[0].max_scores).length > 0 ? 2 : 1}>
                           <div className="flex items-center justify-end gap-1">
                             <span>Actions</span>
@@ -2319,7 +2325,7 @@ export default function SubjectDetailPage() {
                       {filteredAndSortedRecords.length === 0 ? (
                         <TableRow>
                           <TableCell
-                            colSpan={6 + gradeKeys.length + 1}
+                            colSpan={7 + gradeKeys.length + 1}
                             className="text-center text-muted-foreground"
                           >
                             {filterText ? "No records match your search." : "No records found. Add your first record or upload a file."}
@@ -2413,6 +2419,21 @@ export default function SubjectDetailPage() {
                                 {record.grades?.[key] ?? "-"}
                               </TableCell>
                             ))}
+                            <TableCell className="text-center font-semibold">
+                              {record.computed_grade?.finalGrade !== undefined ? (
+                                <span
+                                  className={`px-2 py-1 rounded ${
+                                    record.computed_grade.finalGrade >= (gradingSystem?.passing_grade || 50)
+                                      ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+                                      : "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+                                  }`}
+                                >
+                                  {record.computed_grade.finalGrade.toFixed(2)}%
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">-</span>
+                              )}
+                            </TableCell>
                             <TableCell className="text-right sticky right-0 z-30 bg-background/95 backdrop-blur-sm min-w-[120px] border-l-2 border-border/50 shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.1),_-2px_0_8px_-2px_rgba(0,0,0,0.05)] dark:shadow-[inset_4px_0_8px_-4px_rgba(0,0,0,0.3),_-2px_0_8px_-2px_rgba(0,0,0,0.2)]">
                               <div className="flex justify-end gap-2">
                                 <Button
@@ -3328,6 +3349,40 @@ export default function SubjectDetailPage() {
                     </CardContent>
                   )}
                 </Card>
+                
+                {/* Passing Grade Configuration */}
+                <Card className="shadow-sm border-2">
+                  <CardHeader className="pb-4">
+                    <CardTitle className="text-xl flex items-center gap-2">
+                      <span className="text-2xl">🎯</span>
+                      Passing Grade
+                    </CardTitle>
+                    <CardDescription className="text-base mt-1">
+                      Set the minimum grade required to pass. Grades at or above this threshold will be displayed in green, below in red.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-3 bg-muted/50 px-4 py-3 rounded-lg">
+                      <Label className="font-medium whitespace-nowrap">Passing Grade:</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={gradingSystem.passing_grade ?? 50}
+                        onChange={(e) => {
+                          const newPassingGrade = parseFloat(e.target.value) || 50;
+                          const updatedSystem: GradingSystem = {
+                            ...gradingSystem,
+                            passing_grade: newPassingGrade,
+                          };
+                          setGradingSystem(updatedSystem);
+                        }}
+                        className="w-24 text-center font-semibold"
+                      />
+                      <span className="font-medium">%</span>
+                    </div>
+                  </CardContent>
+                </Card>
               </div>
             ) : (
               <Alert className="border-2 my-4">
@@ -3412,7 +3467,15 @@ export default function SubjectDetailPage() {
                             );
                           })}
                           <TableCell className="text-center font-bold">
-                            {computed.finalGrade.toFixed(2)}%
+                            <span
+                              className={`px-2 py-1 rounded ${
+                                computed.finalGrade >= (gradingSystem?.passing_grade || 50)
+                                  ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+                                  : "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+                              }`}
+                            >
+                              {computed.finalGrade.toFixed(2)}%
+                            </span>
                           </TableCell>
                         </TableRow>
                       ))}

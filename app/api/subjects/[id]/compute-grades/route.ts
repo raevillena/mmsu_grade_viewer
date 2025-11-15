@@ -150,36 +150,51 @@ export async function POST(
       // Round to 2 decimal places
       finalGrade = Math.round(finalGrade * 100) / 100;
       
+      const breakdown = gradingSystem.categories.map((category) => ({
+        categoryId: category.id,
+        categoryName: category.name,
+        categoryWeight: category.weight,
+        categoryScore: categoryScores[category.id]?.score ?? 0,
+        components: category.components.map((component) => {
+          const componentScores = component.gradeKeys.map((key) => ({
+            gradeKey: key,
+            score: grades[key] ?? 0,
+            maxScore: maxScores[key] ?? 0,
+          }));
+          const componentTotal = componentScores.reduce((sum, item) => sum + item.score, 0);
+          const componentMax = componentScores.reduce((sum, item) => sum + item.maxScore, 0);
+          const componentPercentage = componentMax > 0 ? (componentTotal / componentMax) * 100 : 0;
+          
+          return {
+            componentId: component.id,
+            componentName: component.name,
+            componentWeight: component.weight,
+            componentScore: Math.round(componentPercentage * 100) / 100,
+            gradeKeys: componentScores,
+          };
+        }),
+      }));
+
+      const computedGradeData = {
+        finalGrade,
+        categoryScores,
+        breakdown,
+        computedAt: new Date().toISOString(),
+      };
+
+      // Save computed grade to the record
+      await supabase
+        .from("records")
+        .update({ computed_grade: computedGradeData })
+        .eq("id", record.id);
+
       return {
         recordId: record.id,
         studentName: record.student_name,
         studentNumber: record.student_number,
         finalGrade,
         categoryScores,
-        breakdown: gradingSystem.categories.map((category) => ({
-          categoryId: category.id,
-          categoryName: category.name,
-          categoryWeight: category.weight,
-          categoryScore: categoryScores[category.id]?.score ?? 0,
-          components: category.components.map((component) => {
-            const componentScores = component.gradeKeys.map((key) => ({
-              gradeKey: key,
-              score: grades[key] ?? 0,
-              maxScore: maxScores[key] ?? 0,
-            }));
-            const componentTotal = componentScores.reduce((sum, item) => sum + item.score, 0);
-            const componentMax = componentScores.reduce((sum, item) => sum + item.maxScore, 0);
-            const componentPercentage = componentMax > 0 ? (componentTotal / componentMax) * 100 : 0;
-            
-            return {
-              componentId: component.id,
-              componentName: component.name,
-              componentWeight: component.weight,
-              componentScore: Math.round(componentPercentage * 100) / 100,
-              gradeKeys: componentScores,
-            };
-          }),
-        })),
+        breakdown,
       };
     });
 

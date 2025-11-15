@@ -12,7 +12,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { type Record } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { format } from "date-fns";
-import { Calculator, Loader2 } from "lucide-react";
+import { Calculator, Loader2, Info } from "lucide-react";
+import Link from "next/link";
 
 interface RecordWithSubject extends Record {
   subject_name?: string | null;
@@ -189,7 +190,13 @@ function GradesPageContent() {
 
   return (
     <div className="min-h-screen bg-background py-12 px-4 relative">
-      <div className="absolute top-4 right-4">
+      <div className="absolute top-4 right-4 flex items-center gap-2">
+        <Button variant="ghost" size="sm" asChild>
+          <Link href="/about" className="flex items-center gap-2">
+            <Info className="h-4 w-4" />
+            About
+          </Link>
+        </Button>
         <ThemeToggle />
       </div>
       <div className="max-w-4xl mx-auto">
@@ -367,12 +374,23 @@ function GradesPageContent() {
             )}
             {computedGrade && (
               <div className="space-y-6">
-                <div className="bg-primary/10 rounded-lg p-6 text-center">
+                <div className={`rounded-lg p-6 text-center ${
+                  computedGrade.finalGrade >= (computedGrade.passingGrade || 50)
+                    ? "bg-green-100 dark:bg-green-900/30"
+                    : "bg-red-100 dark:bg-red-900/30"
+                }`}>
                   <div className="text-sm text-muted-foreground mb-2">Final Grade</div>
-                  <div className="text-5xl font-bold text-primary">
+                  <div className={`text-5xl font-bold ${
+                    computedGrade.finalGrade >= (computedGrade.passingGrade || 50)
+                      ? "text-green-800 dark:text-green-400"
+                      : "text-red-800 dark:text-red-400"
+                  }`}>
                     {computedGrade.finalGrade.toFixed(2)}
                   </div>
                   <div className="text-sm text-muted-foreground mt-2">out of 100.00</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    Passing Grade: {(computedGrade.passingGrade || 50).toFixed(0)}%
+                  </div>
                 </div>
 
                 {computedGrade.breakdown && computedGrade.breakdown.length > 0 && (
