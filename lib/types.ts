@@ -61,7 +61,7 @@ export interface Subject {
  */
 export interface ComputedGrade {
   finalGrade: number;
-  categoryScores: Record<string, { score: number; maxScore: number; weight: number }>;
+  categoryScores: globalThis.Record<string, { score: number; maxScore: number; weight: number }>;
   breakdown: any[];
   computedAt: string;
 }
