@@ -182,12 +182,6 @@ export async function POST(
         computedAt: new Date().toISOString(),
       };
 
-      // Save computed grade to the record
-      await supabase
-        .from("records")
-        .update({ computed_grade: computedGradeData })
-        .eq("id", record.id);
-
       return {
         recordId: record.id,
         studentName: record.student_name,
@@ -195,15 +189,29 @@ export async function POST(
         finalGrade,
         categoryScores,
         breakdown,
+        computedGradeData, // Include this for saving
       };
     });
+
+    // Save computed grades to database
+    await Promise.all(
+      computedGrades.map((computed) =>
+        supabase
+          .from("records")
+          .update({ computed_grade: computed.computedGradeData })
+          .eq("id", computed.recordId)
+      )
+    );
+
+    // Remove computedGradeData from response
+    const responseData = computedGrades.map(({ computedGradeData, ...rest }) => rest);
 
     return NextResponse.json({
       success: true,
       data: {
         subjectId,
         subjectName: subject.name,
-        computedGrades,
+        computedGrades: responseData,
         gradingSystem,
       },
     });
