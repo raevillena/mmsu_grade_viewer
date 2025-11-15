@@ -131,7 +131,7 @@ function GradesPageContent() {
 
   // Group records by subject
   const groupRecordsBySubject = (records: RecordWithSubject[]) => {
-    const grouped: Record<string, RecordWithSubject[]> = {};
+    const grouped: { [key: string]: RecordWithSubject[] } = {};
     records.forEach((record) => {
       const subjectId = record.subject_id;
       if (!grouped[subjectId]) {
